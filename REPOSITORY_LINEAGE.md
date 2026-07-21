@@ -56,7 +56,10 @@ Both repositories implement:
 | `47800df` | Jul 21 12:28 | bounded runtime and `/data3/research1` artifact contract |
 | `e5ab47b` | Jul 21 12:51 | eight scheduler slots for the current sweep |
 
-The sister repository's `master` stayed focused on the static B1 workbook at
-`94cc262`; its active paper branches later added static-scene figures and
-controller studies. Those are not SFM results and are not copied here.
-
+The sister repository's default `main` stayed focused on the static B1 workbook
+at `94cc262`; its active paper branches later added static-scene figures and
+controller studies. At the final remote audit, `paper/b1-margin50-trends` was at
+`5ff8623` (2026-07-21 14:03:48 PDT), only minutes before this SFM package commit.
+That temporal overlap means the two projects were actively updated in parallel,
+not that either commit belongs to the other repository's history. Those static
+results are not copied here.
