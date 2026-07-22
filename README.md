@@ -1,17 +1,21 @@
 # Safe Flow Expansion for moving-crowd SFM navigation
 
 This repository is the standalone research handoff for the moving-pedestrian
-SFM extension of **B1 Safe Flow Expansion**. It preserves the exact source
-snapshot, transitive policy/SafeMPPI/verifier dependencies, promoted Hp10
-checkpoint, prior selected checkpoint, fixed-bank evidence, mechanism videos,
-and runtime-gate provenance used by the current study.
+SFM extension of **B1 Safe Flow Expansion**. Commit `1820687` preserves the
+exact completed `e5ab47b` source snapshot and its transitive dependencies. The
+current tree keeps that completed lineage in Git history and adds a separately
+labeled, regression-tested adaptive-\(K\) qualification path without changing
+the legacy fixed-\(B\) gather function. It also bundles the promoted Hp10
+checkpoint, fixed-bank evidence, mechanism videos, and runtime provenance.
 
-> **Status (2026-07-21).** The current nine-arm
-> \(\alpha\times\) replay-epoch sweep is running on Helios under source commit
-> `e5ab47ba4971aae6c1df710c6d6864577f3728f7`. Claude is operating the run;
-> this repository does not claim unfinished results. All live outputs belong
-> under `/data3/research1`. The latest completed result bundled here is the
-> fixed M100-per-\(\gamma\) pre-expansion ID/OOD deployment described below.
+> **Status (2026-07-22).** The nine-arm \(\alpha\times\) replay-epoch sweep
+> completed under source commit
+> `e5ab47ba4971aae6c1df710c6d6864577f3728f7`. Its selected checkpoint did
+> **not** meet the SFM goal: canonical raw M100-per-\(\gamma\) evaluation gave
+> SR 66.57%, CR 32.57%, and trajectory-level \(V_{\rm safe}=0\). The result,
+> selection records, checkpoint, and arm plot are bundled below. The complete
+> authenticated run remains at
+> `/data3/research1/sfm_b1_alpha_inner_full_e5ab47b_20260721`.
 
 ## TL;DR
 
@@ -29,14 +33,23 @@ and runtime-gate provenance used by the current study.
   and only full-horizon positives enter \(\mathcal D^+\). The executed first
   action is the admissible positive with maximum one-step nominal \(H_P\)
   margin. No admissible query means fail-closed NVP for that replica only.
-- The current GP memory uses a two-round window, at most 256 retained
+- The completed sweep's GP memory used a two-round window, at most 256 retained
   upper-quartile positives per round, rotating equal \(\gamma\) quotas, and a
   cap of 512. \(\beta_n\) is recalibrated each round to normalized ESS 0.5.
-- The completed severe OOD benchmark doubles both pedestrian count and speed:
+- The severe OOD benchmark doubles both pedestrian count and speed:
   training/ID is 20 pedestrians at 0.5–1.0 m/s; OOD is 40 at 1.0–2.0 m/s.
   The prior selected A-r10 checkpoint did **not** improve r0 there
-  (CR 30.3% versus 30.0%). This is the negative baseline the running sweep must
-  beat.
+  (CR 30.3% versus 30.0%). The completed nine-arm sweep also failed to establish
+  improvement: its selected r3 checkpoint had canonical CR 32.57% on the
+  untouched final bank.
+- Across all nine arms, 10,078 of 10,080 gathering trajectories ended in NVP;
+  only two reached the goal. The method accumulated many locally certified
+  windows but almost no complete verified-controller trajectories.
+- The next falsifiable arm is an adaptive learned-proposal budget: keep the
+  selected learning recipe, enlarge the flow pool to \(K=64\), and query four
+  at a time until an admissible plan is found or the declared budget is
+  exhausted. It is specified in [LATEST_RESULT.md](LATEST_RESULT.md) and is not
+  yet a result.
 - Raw evaluation always means the canonical generative policy: temperature 1,
   NFE 8, one sampled window per context, execute its first action, with no GP,
   verifier, selector, guidance, MPPI refinement, or fallback.
@@ -77,11 +90,16 @@ uses a fixed safety level
 | `double_density_velocity_ood` | 40 | 1.0–2.0 m/s | current severe OOD expansion target |
 | `density_ood` | 50 | 0.5–1.0 m/s | rejected diagnostic: r0 was already nearly saturated |
 
+The frozen source also contains a historical profile literally named `id` with
+10 pedestrians. It is an easier legacy benchmark; `matched_id` in this
+workbook means the actual 20-pedestrian demonstration distribution.
+
 The headline metrics are success rate (SR), collision rate (CR), successful
-minimum clearance, successful time-to-goal, and raw planned-window safety
-validity \(V_{\rm safe}\). Fixed scenario banks and all seven \(\gamma\) values
-must be shared across compared checkpoints. One explanatory gallery is not an
-evaluation.
+minimum clearance, successful time-to-goal, and trajectory-level raw safety
+validity \(V_{\rm safe}\): the conjunction of the planned-window checks along
+an executed raw trajectory. Fixed scenario banks and all seven \(\gamma\)
+values must be shared across compared checkpoints. One explanatory gallery is
+not an evaluation.
 
 ## 2. Demonstrations and Hp10 pretraining
 
@@ -177,8 +195,10 @@ finite-pool Gibbs tilt
 \]
 
 The authenticated 50-embedding preflight found
-\(\ell_0=0.4842165344\) and fixed \(\ell=0.2421082672\). The stable active
-configuration uses cap 512 and \(\lambda=0.01\). At the start of every round,
+\(\ell_0=0.4842165344\) and fixed \(\ell=0.2421082672\). Its generic ranking
+selected cap 256 (uplift 0.06455), while the declared sweep threshold selected
+the stable cap-512 row (uplift 0.07143); the completed arms used cap 512 and
+\(\lambda=0.01\). At the start of every round,
 \(\beta_n\) is solved for normalized ESS 0.5. ESS controls selection
 concentration; it does not guarantee behavioral multimodality.
 
@@ -209,7 +229,7 @@ Execution has a second, local admissibility gate:
  H_P(x^j_{t+1})\ge(1-\gamma)H_P(x_t)\right\}.
 \]
 
-The current sweep uses the original max-one-step-margin rule
+The completed sweep used the original max-one-step-margin rule
 
 \[
  j^\star\in\arg\max_{j\in\mathcal A_t}
@@ -255,7 +275,7 @@ For negative replay, let \(g_+=\nabla\mathcal L_+\) and
 \]
 
 At \(\alpha=0\), the code delegates before touching \(\mathcal D^-\), making
-it exactly the positive-only control. The running sweep fixes 16 optimizer
+it exactly the positive-only control. The completed sweep fixed 16 optimizer
 chunks, batch size 128, learning rate \(10^{-4}\), and varies
 \(\alpha\in\{0,10^{-3},10^{-2}\}\) and complete replay epochs
 \(E\in\{1,4,16\}\).
@@ -263,26 +283,80 @@ chunks, batch size 128, learning rate \(10^{-4}\), and varies
 ## 4. Honest evaluation and selection
 
 Training/gathering trajectories are controller-induced and uncertainty tilted;
-they are not raw model evaluation. The current protocol therefore separates:
+they are not raw model evaluation. The completed protocol therefore separated:
 
 1. canonical raw temperature-1 M10/\(\gamma\) monitoring at every round;
 2. four shortlisted checkpoints selected from development records;
 3. a disjoint M10 bank that locks one seven-\(\gamma\) temperature vector per
    shortlisted checkpoint;
 4. one M50/\(\gamma\) screen for those locked candidates;
-5. one untouched paired M100/\(\gamma\) confirmation for the winner, reporting
-   both canonical temperature 1 and the locked vector.
+5. one untouched M100/\(\gamma\) confirmation for the winner, reporting both
+   canonical temperature 1 and the locked vector.
 
 Temperature tuning is therefore a separately labeled deployment calibration,
 not a replacement for canonical raw evaluation and not a per-round post-hoc
-hack.
+hack. In this run, “paired” meant two sampling-temperature modes of the same
+selected checkpoint; r0 was not rerun on that exact final bank.
 
 Kazuki is also a separate controller: it starts from the same Hp10 pretrained
 prior, adds goal/safety guidance, and performs MPPI refinement. Even zero
 guidance coefficients would not make it raw flow because refinement and warm
 start remain.
 
-## 5. Latest completed fixed-bank result
+## 5. Completed alpha-by-replay-epoch sweep
+
+The study evaluated nine max-margin arms:
+\(\alpha\in\{0,10^{-3},10^{-2}\}\) by complete replay epochs
+\(E\in\{1,4,16\}\), for 20 rounds each. The run completed in 16,776.9 s
+(4 h 39 min 37 s). Development M10 nominated four checkpoints; disjoint
+temperature calibration and M50 screening selected
+`margin_alpha0p001_inner016@r3`.
+
+| evaluation | temperature | SR | CR | timeout | \(V_{\rm safe}\) | successful clearance | successful time |
+|---|---|---:|---:|---:|---:|---:|---:|
+| disjoint M50 screen | locked per \(\gamma\) | 71.14% | 28.57% | — | 0.57% | 0.149 m | 8.76 s |
+| untouched M100 confirmation | canonical 1 | 66.57% | 32.57% | 0.86% | 0.00% | 0.116 m | 8.85 s |
+| untouched M100 confirmation | locked per \(\gamma\) | 65.86% | 33.29% | 0.86% | 0.00% | 0.117 m | 8.96 s |
+
+For canonical M100, the scenario-cluster bootstrap intervals were 61.57–71.57%
+for SR and 27.71–37.43% for CR. The successful-clearance bootstrap interval was
+0.104–0.127 m. The locked temperature vector did not generalize from screening;
+it was slightly worse than canonical temperature one on the final bank.
+
+![Nine-arm canonical M10 development curves](assets/results/e5ab47b_alpha_epoch_sweep/arm_comparison.png)
+
+The scientific result is negative:
+
+1. no arm produced nonzero trajectory-level \(V_{\rm safe}\) on the fixed M10
+   development bank;
+2. stronger replay created transient M10 improvements but no stable downward CR
+   trend, and the M50 winner did not confirm on M100;
+3. the three negative-replay strengths did not solve the mismatch;
+4. all nine gathering controllers were almost completely fail-closed:
+   10,078/10,080 trajectories ended in NVP, with a median of only 8–9 executed
+   steps, despite collecting 39,916–42,939 full-H positive windows per arm;
+5. median reported uncertainty uplift was near zero or negative after the first
+   rounds. Because selected sigma is recorded after sequential conditioning
+   while pool sigma is the pre-acquisition value, this statistic is not by
+   itself a clean proof of anti-selection, but it does not show sustained
+   separation either.
+
+Therefore the target CR below 5%, improvement over the pretrained policy, and
+improvement over Kazuki were not achieved. The old pre-expansion r0/Kazuki
+numbers below use a different fixed M100 bank and are context, not a paired
+delta. A future study must include r0 on the exact final candidate bank.
+
+The immutable records are under
+`provenance/e5ab47b_alpha_epoch_sweep/`; the promoted experimental checkpoint
+is `checkpoints/b1_alpha001_inner16_selected_r3.pt` (SHA-256
+`0a152a2926eaf94bf141d37a6748d0b6a83309f8b9a3a25134ba393f72241938`).
+The `round_records/` subdirectory contains compact, source-hash-bound r1–r20
+records for all nine arms. It preserves every r1–r20 raw M10 summary and the aggregate
+gather/replay counts needed to reconstruct the curves and the 10,078/10,080 NVP
+total, while deliberately omitting large query tensors and per-sample optimizer
+visit lists.
+
+## 6. Pre-expansion fixed-bank baseline
 
 The bundled result uses 100 predeclared scenarios per \(\gamma\), 700 rollouts
 per method and profile. “Selected B1 raw” is the legacy arm-A round-10
@@ -318,7 +392,7 @@ The complete cell-level metrics, Wilson intervals, scenario-cluster bootstrap
 intervals, seed banks, and checkpoint hashes are retained under
 `provenance/pre_expansion/`.
 
-## 6. Mechanism visualization
+## 7. Mechanism visualization
 
 The method panels compare \(\gamma\in\{0.1,0.5,1.0\}\). Videos are linked next
 to their still previews.
@@ -343,7 +417,7 @@ evidence. Any regenerated query diagnostic must use gray for K, orange for B,
 green for full-H positive, red for rejected, and thick blue for the executed
 first action; every candidate must own its own fitted verifier witness.
 
-## 7. Code map and reproduction
+## 8. Code map and reproduction
 
 Start with [CODE_INDEX.md](CODE_INDEX.md). The active entry points are:
 
@@ -353,8 +427,12 @@ Start with [CODE_INDEX.md](CODE_INDEX.md). The active entry points are:
 - `sfm_metrics2.py`: full-H moving-pedestrian fitted-face certificate;
 - `sfm_b1_store.py`: query shards, gamma-balanced GP retention, hierarchical
   replay, and signed gradient update;
-- `sfm_b1_alpha_steps_sweep.py`: current nine-arm evaluation/selection driver;
+- `sfm_b1_alpha_steps_sweep.py`: completed nine-arm evaluation/selection driver;
 - `run_sfm_b1_alpha_inner_sweep.sh`: authenticated Helios launcher;
+- `sfm_b1_adaptive_k64_study.py`: proposed five-round adaptive-query
+  qualification with paired raw r0/selected M100 confirmation;
+- `run_sfm_b1_adaptive_k64_study.sh`: GPU-3 launcher pinned to the promoted
+  Hp10 checkpoint;
 - `stage3_pretrain_sfm.py`: trajectory-disjoint Hp10 pretraining;
 - `sfm_b1_benchmark.py` and `sfm_b1_curve_eval.py`: fixed-bank raw evaluation.
 
@@ -376,7 +454,7 @@ be checked without running science:
 python scripts/verify_package.py
 ```
 
-## 8. Known blind spots
+## 9. Known blind spots
 
 1. A valid H=10 window is not a proof of recursive feasibility or eventual
    goal reach.
@@ -396,9 +474,16 @@ python scripts/verify_package.py
    not present in the authenticated `e5ab47b` source tree. The faithful expert,
    dataset hashes, split metadata, and pretraining code are included, but the
    large tensor files remain external.
-8. The current sweep's runtime gate forecasts about 5 h 29 min. Its dominant
-   measured stages were raw M10 sanity evaluation and verification, not GPU
-   CFM updates. The gate is provenance, not a scientific outcome.
+8. The completed sweep took 4 h 39 min. Its dominant measured stages were raw
+   M10 sanity evaluation and verification, not GPU CFM updates.
+9. The final M100 bank compared canonical and locked temperatures only for the
+   selected checkpoint. It did not rerun r0 or Kazuki on that same bank.
+10. The completed trainer did not perform the requested unselected-\(K-B\) NVP
+    audit online. A later read-only audit of the saved r1–r3 traces is bundled
+    in `provenance/e5ab47b_alpha_epoch_sweep/NVP_SUPPORT_AUDIT.md`. Most audited
+    contexts exhausted the saved learned \(K=16\) pool; this does not distinguish
+    proposal scarcity from genuine state/H10 infeasibility, and it did not alter
+    the completed run.
 
 ## Artifacts and provenance
 
@@ -406,6 +491,9 @@ python scripts/verify_package.py
   `1b5179c935d3eeff8824967d707d64cc9bab273949ee1f0e4f190172bab1b215`.
 - Legacy selected A-r10: `checkpoints/b1_legacy_selected_A_r10.pt`, SHA-256
   `bf6f521dd2dd6de4cffcce672a8ce4adbf00bb14e71dd9fd27704d205f65744c`.
-- Current source lineage: `safeMPPI@e5ab47ba4971aae6c1df710c6d6864577f3728f7`.
+- Alpha/epoch selected r3: `checkpoints/b1_alpha001_inner16_selected_r3.pt`,
+  SHA-256 `0a152a2926eaf94bf141d37a6748d0b6a83309f8b9a3a25134ba393f72241938`.
+- Completed source lineage: `safeMPPI@e5ab47ba4971aae6c1df710c6d6864577f3728f7`.
+- Completed result records: `provenance/e5ab47b_alpha_epoch_sweep/`.
 - Runtime gate: `provenance/runtime_gate/`.
 - Byte-level inventory: `SOURCE_MANIFEST.json`.

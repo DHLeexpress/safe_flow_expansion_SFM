@@ -102,7 +102,8 @@ def assert_disjoint_banks(tune_ep0: int, tune_m: int, screen_ep0: int, screen_m:
 
 
 def assert_final_confirmation_bank(ep0: int, M: int) -> None:
-    if (int(ep0), int(M)) != (int(SP.FINAL_CONFIRM_EP0), 100):
+    declared = {int(SP.FINAL_CONFIRM_EP0), int(SP.ADAPTIVE_CONFIRM_EP0)}
+    if int(ep0) not in declared or int(M) != 100:
         raise ValueError(
             "scientific confirmation is locked to the declared disjoint M100 bank"
         )

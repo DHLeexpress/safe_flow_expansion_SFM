@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Build the byte-level package inventory, excluding Git and the inventory itself."""
+"""Build the byte-level package inventory from files tracked by Git."""
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "SOURCE_MANIFEST.json"
-EXCLUDED_PARTS = {".git", ".pytest_cache", "__pycache__"}
-EXCLUDED_FILES = {OUTPUT.name, ".DS_Store"}
 
 
 def digest(path: Path) -> str:
@@ -21,14 +20,29 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
+def tracked_files() -> list[Path]:
+    """Return the committed package surface, excluding this derived manifest."""
+    result = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    relative_paths = [
+        Path(raw.decode())
+        for raw in result.stdout.split(b"\0")
+        if raw and raw.decode() != OUTPUT.name
+    ]
+    missing = [path.as_posix() for path in relative_paths if not (ROOT / path).is_file()]
+    if missing:
+        raise RuntimeError(f"tracked package files are missing: {missing}")
+    return sorted(relative_paths)
+
+
 def main() -> None:
     rows = []
-    for path in sorted(ROOT.rglob("*")):
-        if not path.is_file() or path.name in EXCLUDED_FILES:
-            continue
-        relative = path.relative_to(ROOT)
-        if EXCLUDED_PARTS.intersection(relative.parts):
-            continue
+    for relative in tracked_files():
+        path = ROOT / relative
         rows.append({
             "path": relative.as_posix(),
             "bytes": path.stat().st_size,
@@ -45,4 +59,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

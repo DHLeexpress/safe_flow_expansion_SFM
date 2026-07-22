@@ -1,5 +1,5 @@
 {
-  "status": "RUNNING_NOT_A_RESULT",
+  "status": "DECLARED_RECIPE",
   "source_commit": "e5ab47ba4971aae6c1df710c6d6864577f3728f7",
   "scene_profile": "double_density_velocity_ood",
   "rounds": 20,
@@ -39,4 +39,3 @@
   },
   "output_root": "/data3/research1"
 }
-

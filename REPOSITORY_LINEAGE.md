@@ -56,10 +56,11 @@ Both repositories implement:
 | `47800df` | Jul 21 12:28 | bounded runtime and `/data3/research1` artifact contract |
 | `e5ab47b` | Jul 21 12:51 | eight scheduler slots for the current sweep |
 
-The sister repository's default `main` stayed focused on the static B1 workbook
-at `94cc262`; its active paper branches later added static-scene figures and
-controller studies. At the final remote audit, `paper/b1-margin50-trends` was at
-`5ff8623` (2026-07-21 14:03:48 PDT), only minutes before this SFM package commit.
-That temporal overlap means the two projects were actively updated in parallel,
-not that either commit belongs to the other repository's history. Those static
-results are not copied here.
+At the 2026-07-22 remote audit, the sister repository's default `main` was at
+`5c0b753`; its paper branches were `paper/b1-evolution-and-modes@e03be78` and
+`paper/b1-margin50-trends@edc1c49`. The SFM standalone `master` was still at
+`1820687` before this completed-result update. This temporal overlap means the
+two projects were actively updated in parallel, not that either commit belongs
+to the other repository's history. Static metrics and task-specific temperature
+or adaptive-gamma studies are not evidence for the SFM scene and are not copied
+here.

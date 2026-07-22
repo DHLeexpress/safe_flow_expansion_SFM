@@ -11,6 +11,7 @@ import sfm_b1_eval as E
 import sfm_b1_expand as X
 import sfm_b1_query_diagnostic as QD
 import sfm_b1_sweep as SW
+import sfm_protocol as SP
 import sfm_scene as SS
 
 
@@ -113,6 +114,50 @@ def test_alpha_inner_epoch_sweep_keeps_margin_execution_and_declared_replay():
             optimizer_steps=16, inner_epochs=4, lr=1e-4, sanity_M=10,
             scene_profile="double_density_velocity_ood",
         ).validate()
+
+
+def test_adaptive_k64_contract_is_separate_from_fixed_b4_control():
+    fixed = X.ArmConfig(
+        name="fixed", selector="margin", alpha=.001,
+        optimizer_steps=16, inner_epochs=16, lr=1e-4, sanity_M=10,
+        scene_profile="double_density_velocity_ood",
+    ).validate()
+    assert (fixed.K, fixed.B, fixed.max_queries, fixed.acquisition_mode) == (
+        16, 4, 4, "fixed_b4",
+    )
+    adaptive = X.ArmConfig(
+        name="adaptive", selector="margin", alpha=.001,
+        optimizer_steps=16, inner_epochs=16, lr=1e-4, sanity_M=10,
+        scene_profile="double_density_velocity_ood",
+        K=SP.ADAPTIVE_PROPOSAL_K, B=SP.ADAPTIVE_QUERY_BATCH,
+        max_queries=SP.ADAPTIVE_MAX_QUERIES, acquisition_mode="adaptive_k64",
+    ).validate()
+    assert (adaptive.K, adaptive.B, adaptive.max_queries) == (64, 4, 64)
+    with pytest.raises(ValueError, match="adaptive acquisition"):
+        X.ArmConfig(
+            name="bad_adaptive", selector="margin", alpha=.001,
+            optimizer_steps=16, inner_epochs=16, lr=1e-4, sanity_M=10,
+            scene_profile="double_density_velocity_ood",
+            K=64, B=4, max_queries=32, acquisition_mode="adaptive_k64",
+        ).validate()
+
+
+def test_adaptive_query_batches_are_complete_without_replacement():
+    batches = X.adaptive_query_slices(range(64), batch=4, max_queries=64)
+    assert len(batches) == 16
+    assert batches[0] == [0, 1, 2, 3] and batches[-1] == [60, 61, 62, 63]
+    assert [candidate for batch in batches for candidate in batch] == list(range(64))
+    with pytest.raises(ValueError, match="duplicates"):
+        X.adaptive_query_slices([0, 1, 1, 2], batch=2, max_queries=4)
+    with pytest.raises(ValueError, match="batched prefix"):
+        X.adaptive_query_slices(range(64), batch=4, max_queries=62)
+
+
+def test_adaptive_rescue_buckets_are_declared_query_ranges():
+    assert X._adaptive_rescue_bucket(4) == "initial_1_4"
+    assert X._adaptive_rescue_bucket(8) == "rescued_5_16"
+    assert X._adaptive_rescue_bucket(20) == "rescued_17_32"
+    assert X._adaptive_rescue_bucket(64) == "rescued_33_64"
 
 
 def test_scientific_eval_cli_requires_scene_profile():

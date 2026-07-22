@@ -40,6 +40,8 @@ def test_offline_equals_online_deque():
 
 def test_stored_dataset_hp10_equals_online_deque():
     path = Path("/home/dohyun/projects/cfm_mppi/overnight_run_07_12_sfm/dataset_id_v01/sfm_windows_g0.5.pt")
+    if not path.exists():
+        pytest.skip("external tensor dataset is not bundled in the standalone repository")
     data = torch.load(path, map_location="cpu", mmap=True, weights_only=False)
     episode = int(torch.unique(data["episode"], sorted=True)[0])
     indices = torch.nonzero(data["episode"] == episode, as_tuple=False).flatten()

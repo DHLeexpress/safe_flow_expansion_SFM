@@ -29,6 +29,7 @@ def test_banks_must_be_disjoint_and_nonempty():
     with pytest.raises(ValueError):
         C.assert_disjoint_banks(100, 0, 200, 50)
     C.assert_final_confirmation_bank(C.SP.FINAL_CONFIRM_EP0, 100)
+    C.assert_final_confirmation_bank(C.SP.ADAPTIVE_CONFIRM_EP0, 100)
     with pytest.raises(ValueError):
         C.assert_final_confirmation_bank(C.SCREEN_EP0, 100)
 

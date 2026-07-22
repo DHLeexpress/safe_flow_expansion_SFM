@@ -14,12 +14,14 @@ original directory layout because the authenticated source uses `_paths.py`.
 | `overnight_run_07_12_sfm/sfm_scene.py` | Hashed training, ID, moderate OOD, severe OOD, and density-only scene profiles. | Constant spawn law may not span all crowd processes. |
 | `overnight_run_07_12_sfm/sfm_metrics2.py` | H10 rollout, moving-pedestrian prediction, exact angular-interval fitted-face certificate, K16 outer faces. | Not a generic conic solver; assumes constant pedestrian velocity. |
 | `overnight_run_07_12_sfm/sfm_b1_rbf.py` | RBF posterior, sequential without-replacement acquisition, adaptive ESS beta. | Kernel uncertainty can be blind in a collapsed representation. |
-| `overnight_run_07_12_sfm/sfm_b1_cost.py` | Nominal-Hp admissibility and max-margin / frozen SafeMPPI-cost selectors. | The current sweep activates max margin only; local margin is not recursive feasibility. |
+| `overnight_run_07_12_sfm/sfm_b1_cost.py` | Nominal-Hp admissibility and max-margin / frozen SafeMPPI-cost selectors. | The completed alpha/epoch sweep activated max margin only; local margin is not recursive feasibility. |
 | `overnight_run_07_12_sfm/sfm_b1_store.py` | D/D+ shards, q75 gamma-balanced GP retention, hierarchy mass, positive/signed replay. | W2 and cap512 deliberately forget older acquisition support. |
-| `overnight_run_07_12_sfm/sfm_b1_expand.py` | 56-replica frozen macro-round, K16/B4 gathering, NVP, update, checkpoint. | Controller-induced outcomes are not raw evaluation. |
+| `overnight_run_07_12_sfm/sfm_b1_expand.py` | 56-replica frozen macro-round, unchanged K16/B4 control plus isolated adaptive-K64 gathering, NVP, update, checkpoint. | Controller-induced outcomes are not raw evaluation. |
 | `overnight_run_07_12_sfm/sfm_b1_curve_eval.py` | Canonical per-round raw M10 and locked-temperature evaluation. | Finite M10 is development monitoring, not confirmation. |
-| `overnight_run_07_12_sfm/sfm_b1_alpha_steps_sweep.py` | Nine-arm alpha×epoch scheduler, shortlist, M50 screen, M100 confirmation. | Temperature calibration must remain disjoint and separately labeled. |
-| `overnight_run_07_12_sfm/run_sfm_b1_alpha_inner_sweep.sh` | Helios provenance/resource gate and eight-slot launcher. | Assumes physical GPUs 1/3 and external `/data3/research1`. |
+| `overnight_run_07_12_sfm/sfm_b1_alpha_steps_sweep.py` | Completed nine-arm alpha×epoch scheduler, shortlist, M50 screen, M100 confirmation. | The final bank compared two temperatures for the winner but did not rerun r0 on that exact bank. |
+| `overnight_run_07_12_sfm/run_sfm_b1_alpha_inner_sweep.sh` | Helios provenance/resource gate and eight-slot launcher used by the completed sweep. | Assumes physical GPUs 1/3 and external `/data3/research1`. |
+| `overnight_run_07_12_sfm/sfm_b1_adaptive_k64_study.py` | Proposed five-round one-factor qualification: K64 learned proposals, four-query batches, fixed raw M10 selection, paired r0/selected M100. | Proposed code, not evidence; must not be described as a completed result. |
+| `overnight_run_07_12_sfm/run_sfm_b1_adaptive_k64_study.sh` | GPU-3 fail-closed launcher pinned to the promoted Hp10 checkpoint. | Helios-only; refuses an existing output root. |
 | `overnight_run_07_12_sfm/sfm_b1_benchmark.py` | Fixed-bank raw and Kazuki benchmark. | Comparator semantics differ from raw flow. |
 | `overnight_run_07_12_sfm/sfm_kazuki.py` | Goal/safety guidance plus MPPI refinement using the Hp10 prior. | Zero guidance still leaves MPPI refinement and warm start. |
 | `overnight_run_07_12_sfm/sfm_b1_query_diagnostic.py` | Candidate-specific K/B certificate traces. | Explanatory evidence; never training or evaluation data. |
@@ -42,13 +44,22 @@ endorsement.
 
 ## Tests
 
-`source_snapshot/overnight_run_07_12_sfm/analysis/` contains the 20 focused
+`source_snapshot/overnight_run_07_12_sfm/analysis/` contains the 21 focused
 SFM tests. They cover Hp10 leakage, checkpoint freezing, verifier semantics,
 RBF acquisition, GP retention, replay mass and visit counts, alpha=0 exactness,
 cost matching, fixed-bank curves, artifact contracts, scheduler slots, and
-runtime gates. The authenticated latest worktree passed 118 tests before the
-current run.
+runtime gates. The completed source passed 118 tests before the run; the current
+standalone package passes 138 tests with one intentional skip when the external
+tensor dataset is unavailable.
 
 `tests/test_workbook_contract.py` validates this standalone package without
 rerunning the expensive study.
 
+## Completed-result records
+
+`provenance/e5ab47b_alpha_epoch_sweep/` contains the immutable recipe, selection
+table, four screened candidates, canonical and locked-temperature M100 records,
+the sweep completion marker, and compact source-hash-bound round records for all
+nine arms. `assets/results/e5ab47b_alpha_epoch_sweep/`
+contains the nine-arm development plot. These records are results, not active
+pipeline code.

@@ -54,11 +54,23 @@ class ArmConfig:
     smoke: bool = False
     seed: int = 20260720
     scene_profile: str = "legacy_velocity_ood"
+    acquisition_mode: str = "fixed_b4"
+    max_queries: int = SP.B
 
     def validate(self):
-        if (self.K, self.B, self.T, self.H, self.W, self.batch, self.ess_target) != (
-                16, 4, 180, 10, 2, 128, 0.5):
+        if (self.T, self.H, self.W, self.batch, self.ess_target) != (
+                180, 10, 2, 128, 0.5):
             raise ValueError("scientific B1 knobs differ from the frozen protocol")
+        if self.acquisition_mode == "fixed_b4":
+            if (self.K, self.B, self.max_queries) != (16, 4, 4):
+                raise ValueError("fixed-B control requires K=16 and exactly four queries")
+        elif self.acquisition_mode == "adaptive_k64":
+            if (self.K, self.B, self.max_queries) != (
+                    SP.ADAPTIVE_PROPOSAL_K, SP.ADAPTIVE_QUERY_BATCH,
+                    SP.ADAPTIVE_MAX_QUERIES):
+                raise ValueError("adaptive acquisition requires K=64 and B=4 up to 64 queries")
+        else:
+            raise ValueError("unknown acquisition mode")
         if self.selector not in ("margin", "safemppi_cost"):
             raise ValueError("invalid arm selector")
         if not math.isfinite(float(self.alpha)) or float(self.alpha) < 0.0:
@@ -74,7 +86,8 @@ class ArmConfig:
             raise ValueError("arms B-D require SafeMPPI cost selection")
         if self.name in ARMS and (
                 self.optimizer_steps != 1 or self.inner_epochs != 1
-                or self.lr != SP.LR or self.sanity_M != 0):
+                or self.lr != SP.LR or self.sanity_M != 0
+                or self.acquisition_mode != "fixed_b4"):
             raise ValueError("legacy A-D controls use the frozen one-step replay")
         if self.name not in ARMS and self.selector != "margin":
             raise ValueError("alpha/replay sweep arms keep max-step-margin execution fixed")
@@ -240,7 +253,9 @@ def _initial_beta(phi_policy, gp, replicas, cfg, device, seed):
         target=cfg.ess_target, seed=seed + 17,
     )
     if abs(float(ess) - float(cfg.ess_target)) > 1.0e-4:
-        raise RuntimeError(f"adaptive beta missed ESS/K target: {ess} != {cfg.ess_target}")
+        raise RuntimeError(
+            f"adaptive beta missed normalized ESS target: {ess} != {cfg.ess_target}"
+        )
     return beta, ess
 
 
@@ -416,6 +431,306 @@ def gather_macro_round(policy, phi_policy, gp, beta, replicas, cfg, shard, devic
     )
 
 
+def adaptive_query_slices(order, *, batch, max_queries):
+    """Return the declared without-replacement query batches for one context."""
+    values = list(map(int, order))
+    if len(values) != len(set(values)):
+        raise ValueError("adaptive acquisition order contains duplicates")
+    if int(batch) < 1 or int(max_queries) < int(batch):
+        raise ValueError("invalid adaptive query budget")
+    if int(max_queries) > len(values) or int(max_queries) % int(batch):
+        raise ValueError("adaptive query budget must be a batched prefix of the proposal order")
+    return [
+        values[start:start + int(batch)]
+        for start in range(0, int(max_queries), int(batch))
+    ]
+
+
+def _adaptive_rescue_bucket(query_count):
+    if int(query_count) <= 4:
+        return "initial_1_4"
+    if int(query_count) <= 16:
+        return "rescued_5_16"
+    if int(query_count) <= 32:
+        return "rescued_17_32"
+    return "rescued_33_64"
+
+
+def gather_macro_round_adaptive(policy, phi_policy, gp, beta, replicas, cfg, shard, device,
+                                executor, generator, *, record_all_traces=False):
+    """Gather with K=64 and verifier batches of four until one is admissible.
+
+    This path is intentionally separate from :func:`gather_macro_round` so the
+    frozen K=16/B=4 control is not refactored or numerically perturbed.
+    """
+    if cfg.acquisition_mode != "adaptive_k64":
+        raise ValueError("adaptive gather requires acquisition_mode=adaptive_k64")
+    timers = Counter()
+    sigma_all, sigma_selected, base_sigma_selected, ess_over_remaining = [], [], [], []
+    modes = {key: Counter() for key in ("all_K", "queried", "Dplus", "executed")}
+    rescue = Counter()
+    realized_queries = []
+    traces = []
+    frozen_hash = policy_sha256(policy)
+    for step in range(cfg.T):
+        start = time.perf_counter()
+        live = [replica for replica in replicas if replica.alive]
+        live, batch = _stack_prepared(live, device)
+        timers["sfm_stepping"] += time.perf_counter() - start
+        if not live:
+            break
+        start = time.perf_counter()
+        with torch.no_grad():
+            windows = BE.generate_windows(
+                policy, batch["hp10"], batch["low"], batch["hist"], K=cfg.K,
+                nfe=cfg.nfe, temp=cfg.temp, generator=generator,
+            )
+        timers["flow_proposal"] += time.perf_counter() - start
+        start = time.perf_counter()
+        with torch.no_grad():
+            features = _features(phi_policy, windows, batch, cfg.phi_s)
+        base_sigma = gp.acquisition_sigma_batched(features)
+        acquisition_orders, acquisition_traces = gp.sequential_acquire_batched(
+            features, cfg.max_queries, beta, generator=generator,
+        )
+        sigma_all.extend(map(float, base_sigma.detach().cpu().reshape(-1)))
+        timers["phi_rbf"] += time.perf_counter() - start
+
+        context_ids, all_rows_by_context = [], []
+        query_rows_by_context = [[] for _ in live]
+        queried_ids = [[] for _ in live]
+        chosen_by_context = [None for _ in live]
+        verifier_failed_by_context = [False for _ in live]
+        for context_index, replica in enumerate(live):
+            prepared = replica.prepared
+            context_ids.append(shard.add_context(
+                scenario_id=replica.scenario_id, gamma=replica.gamma, step=step,
+                state=prepared["state"], hp10=prepared["hp10"].numpy(),
+                low5=prepared["low"].numpy(), hist=prepared["hist"].numpy(),
+                ped_xy=prepared["ped_xy"], ped_vel=prepared["ped_vel"],
+            ))
+            ped_prediction = SM.predict_pedestrians(
+                prepared["ped_xy"], prepared["ped_vel"], cfg.H,
+            )
+            all_rows = []
+            for candidate_id in range(cfg.K):
+                controls = windows[context_index, candidate_id].detach().cpu().numpy()
+                segment = SM.rollout_positions(prepared["state"], controls)
+                mode = BE.classify_candidate(segment, ped_prediction)
+                modes["all_K"][mode] += 1
+                all_rows.append(dict(
+                    candidate_id=candidate_id, controls=controls, segment=segment, mode=mode,
+                ))
+            all_rows_by_context.append(all_rows)
+
+        batch_slices = [
+            adaptive_query_slices(order, batch=cfg.B, max_queries=cfg.max_queries)
+            for order in acquisition_orders
+        ]
+        for batch_index in range(cfg.max_queries // cfg.B):
+            unresolved = [
+                index for index, chosen in enumerate(chosen_by_context)
+                if chosen is None and not verifier_failed_by_context[index]
+            ]
+            if not unresolved:
+                break
+            tasks = []
+            for context_index in unresolved:
+                replica = live[context_index]
+                prepared = replica.prepared
+                for candidate_id in batch_slices[context_index][batch_index]:
+                    tasks.append((
+                        context_index, candidate_id, prepared["state"],
+                        windows[context_index, candidate_id].detach().cpu().numpy(),
+                        prepared["ped_xy"], prepared["ped_vel"], replica.gamma,
+                    ))
+                    queried_ids[context_index].append(int(candidate_id))
+                    acquisition_step = len(queried_ids[context_index]) - 1
+                    trace_row = acquisition_traces[context_index][acquisition_step]
+                    sigma_selected.append(float(trace_row["chosen_sigma"]))
+                    base_sigma_selected.append(
+                        float(base_sigma[context_index, candidate_id])
+                    )
+                    ess_over_remaining.append(dict(
+                        rank=acquisition_step + 1,
+                        value=float(trace_row["ess_norm"]),
+                    ))
+            start = time.perf_counter()
+            results = list(executor.map(SM.verify_in_worker, tasks))
+            timers["verifier"] += time.perf_counter() - start
+            by_context = defaultdict(list)
+            for context_index, candidate_id, result in results:
+                by_context[context_index].append((candidate_id, result))
+            start = time.perf_counter()
+            for context_index in unresolved:
+                replica = live[context_index]
+                prepared = replica.prepared
+                lookup = {candidate: result for candidate, result in by_context[context_index]}
+                first_acquisition_step = batch_index * cfg.B
+                for local_offset, candidate_id in enumerate(batch_slices[context_index][batch_index]):
+                    controls = windows[context_index, candidate_id].detach().cpu().numpy()
+                    result = lookup[candidate_id]
+                    mode = all_rows_by_context[context_index][candidate_id]["mode"]
+                    modes["queried"][mode] += 1
+                    if not result.get("resolved"):
+                        verifier_failed_by_context[context_index] = True
+                        shard.add_error(
+                            context_key=(replica.scenario_id, replica.gamma, step),
+                            candidate_id=candidate_id, error=result.get("error"),
+                        )
+                        continue
+                    acquisition_step = first_acquisition_step + local_offset
+                    pending_sigma = float(
+                        acquisition_traces[context_index][acquisition_step]["chosen_sigma"]
+                    )
+                    query_id = shard.add_resolved_query(
+                        context_ids[context_index], candidate_id, controls,
+                        sigma=pending_sigma, result=result, acquisition_step=acquisition_step,
+                        mode=mode, gp_base_sigma=float(base_sigma[context_index, candidate_id]),
+                    )
+                    row = dict(
+                        candidate_id=candidate_id, query_id=query_id, controls=controls,
+                        result=result, mode=mode,
+                    )
+                    query_rows_by_context[context_index].append(row)
+                    if result["y"] == 1 and result["full_h"]:
+                        modes["Dplus"][mode] += 1
+                chosen_by_context[context_index] = (
+                    None if verifier_failed_by_context[context_index]
+                    else BC.select_admissible(
+                        query_rows_by_context[context_index], selector=cfg.selector,
+                        state=prepared["state"], ped_xy=prepared["ped_xy"],
+                        ped_vel=prepared["ped_vel"], gamma=replica.gamma,
+                    )
+                )
+                for row in query_rows_by_context[context_index]:
+                    stored = shard.queries[row["query_id"]]
+                    if "hp_margin" in row:
+                        stored["hp_margin"] = float(row["hp_margin"])
+                    if "step_progress" in row:
+                        stored["step_progress"] = float(row["step_progress"])
+                    if "expert_cost" in row:
+                        stored["expert_cost"] = float(row["expert_cost"])
+            timers["sfm_stepping"] += time.perf_counter() - start
+
+        for context_index, replica in enumerate(live):
+            prepared = replica.prepared
+            chosen = chosen_by_context[context_index]
+            query_count = len(queried_ids[context_index])
+            realized_queries.append(query_count)
+            trace = dict(
+                round=shard.round_i, step=step, scenario_id=replica.scenario_id,
+                gamma=replica.gamma, state=prepared["state"], ped_xy=prepared["ped_xy"],
+                ped_vel=prepared["ped_vel"], all_K=all_rows_by_context[context_index],
+                selected_ids=list(queried_ids[context_index]),
+                query_rows=query_rows_by_context[context_index],
+                acquisition=acquisition_traces[context_index][:query_count], executed_id=None,
+                query_budget=dict(K=cfg.K, batch=cfg.B, max_queries=cfg.max_queries,
+                                  realized=query_count),
+            )
+            if chosen is None:
+                resolved = query_rows_by_context[context_index]
+                verifier_errors = query_count - len(resolved)
+                if verifier_errors:
+                    rescue["verifier_error_fail_closed"] += 1
+                    replica.alive = False
+                    replica.status = "verifier_error"
+                elif any(int(row["result"]["y"]) == 1 for row in resolved):
+                    rescue["hp_gate_failure"] += 1
+                else:
+                    rescue["finite_K_no_y"] += 1
+                if not verifier_errors:
+                    if query_count != cfg.max_queries:
+                        raise RuntimeError(
+                            "adaptive NVP occurred before exhausting the query budget"
+                        )
+                    nvp_fail_closed(replica)
+            else:
+                rescue[_adaptive_rescue_bucket(query_count)] += 1
+                shard.mark_executed(
+                    chosen["query_id"], hp_margin=chosen["hp_margin"],
+                    expert_cost=chosen.get("expert_cost"),
+                )
+                modes["executed"][chosen["mode"]] += 1
+                trace["executed_id"] = int(chosen["candidate_id"])
+                _advance(replica, chosen["controls"][0])
+            if record_all_traces or len(traces) < 64 or chosen is None:
+                traces.append(trace)
+
+    for replica in replicas:
+        if replica.alive:
+            terminal_xy, _ = SS.collect_humans(replica.humans)
+            terminal_clearance = float(
+                np.linalg.norm(terminal_xy - replica.state[:2][None], axis=1).min() - SS.R_PED
+            )
+            replica.minimum_clearance = min(replica.minimum_clearance, terminal_clearance)
+            if terminal_clearance < 0.0:
+                replica.status = "collision"
+            elif float(np.linalg.norm(replica.state[:2] - SS.GOAL)) < 0.5:
+                replica.status = "success"
+            else:
+                replica.status = "timeout"
+            replica.alive = False
+    if policy_sha256(policy) != frozen_hash:
+        raise RuntimeError("policy changed during frozen macro-round")
+    query_array = np.asarray(realized_queries, dtype=float)
+    query_summary = ({"count": 0, "mean": None, "q50": None, "q90": None, "max": None}
+                     if not len(query_array) else dict(
+                         count=len(query_array), mean=float(query_array.mean()),
+                         q50=float(np.quantile(query_array, .5)),
+                         q90=float(np.quantile(query_array, .9)),
+                         max=int(query_array.max()),
+                     ))
+    pending_diagnostic = BR.acquisition_diagnostics(sigma_all, sigma_selected)
+    base_diagnostic = BR.acquisition_diagnostics(sigma_all, base_sigma_selected)
+    sigma_diagnostic = base_diagnostic
+    sigma_diagnostic.update(
+        queried_base_sigma=base_diagnostic["selected_B_sigma"],
+        base_uplift=base_diagnostic["uplift"],
+        pending_conditioned_selected_sigma=pending_diagnostic["selected_B_sigma"],
+        pending_conditioned_uplift=pending_diagnostic["uplift"],
+        comparison_note=(
+            "base_uplift compares selected and pool candidates under the same "
+            "pre-acquisition posterior; pending_conditioned_uplift is retained "
+            "only for continuity with the completed fixed-B diagnostics"
+        ),
+    )
+    ess_values = np.asarray(
+        [row["value"] for row in ess_over_remaining], dtype=float,
+    )
+    ess_by_rank = {}
+    for label, lower, upper in (
+            ("1_4", 1, 4), ("5_16", 5, 16),
+            ("17_32", 17, 32), ("33_64", 33, 64)):
+        values = [
+            row["value"] for row in ess_over_remaining
+            if lower <= row["rank"] <= upper
+        ]
+        ess_by_rank[label] = None if not values else float(np.mean(values))
+    return dict(
+        timers=dict(timers), sigma=sigma_diagnostic,
+        beta=float(beta), realized_ess_over_remaining=(
+            None if not len(ess_values) else float(np.mean(ess_values))
+        ),
+        modes={key: dict(value) for key, value in modes.items()}, traces=traces,
+        adaptive_acquisition=dict(
+            mode=cfg.acquisition_mode, K=cfg.K, query_batch=cfg.B,
+            max_queries=cfg.max_queries, outcomes=dict(rescue),
+            realized_queries=query_summary,
+            ess_normalization="remaining candidate pool at each sequential rank",
+            ess_by_rank=ess_by_rank,
+            beta_calibration_scope="initial sequential ranks 1-4",
+        ),
+        outcomes=[dict(
+            scenario_id=replica.scenario_id, gamma=replica.gamma, status=replica.status,
+            success=replica.status == "success", collision=replica.status == "collision",
+            nvp=replica.status == "nvp", steps=len(replica.controls),
+            verifier_error=replica.status == "verifier_error",
+            min_clearance=replica.minimum_clearance,
+        ) for replica in replicas],
+    )
+
+
 def _save_checkpoint(policy, path, extra):
     temporary = path + ".tmp"
     GPS.save_sfm_policy(policy, temporary, extra=extra)
@@ -539,8 +854,12 @@ def run_arm(checkpoint, outdir, cfg, *, ell, cap, device):
                 phi_policy, gp, replicas, cfg, device, cfg.seed + round_i * 1009
             )
             shard = BS.RoundShard(round_i)
-            gather = gather_macro_round(
-                policy, phi_policy, gp, beta, replicas, cfg, shard, device, executor, torch_generator
+            gather_fn = (gather_macro_round_adaptive
+                         if cfg.acquisition_mode == "adaptive_k64"
+                         else gather_macro_round)
+            gather = gather_fn(
+                policy, phi_policy, gp, beta, replicas, cfg, shard, device, executor,
+                torch_generator,
             )
             retention = BS.retain_gp_upper_quartile(
                 shard, SP.GAMMAS, seed=cfg.seed + round_i * 7919,
@@ -630,6 +949,11 @@ def main():
     parser.add_argument("--inner-epochs", type=int)
     parser.add_argument("--lr", type=float)
     parser.add_argument("--sanity-M", type=int)
+    parser.add_argument(
+        "--adaptive-k64", action="store_true",
+        help=("Generate 64 learned proposals and query the exact verifier four at a time "
+              "until one batch is admissible or all 64 are exhausted."),
+    )
     parser.add_argument("--ell", type=float, required=True)
     parser.add_argument("--cap", type=int, choices=(256, 512), required=True)
     parser.add_argument("--rounds", type=int, default=20)
@@ -649,7 +973,7 @@ def main():
     if args.arm is not None:
         if any(value is not None for value in (
                 args.selector, args.alpha, args.optimizer_steps, args.inner_epochs,
-                args.lr, args.sanity_M)):
+                args.lr, args.sanity_M)) or args.adaptive_k64:
             parser.error("legacy --arm A-D cannot be combined with custom sweep knobs")
         arm = ARMS[args.arm]
         name = args.arm
@@ -669,6 +993,10 @@ def main():
         verifier_workers=args.verifier_workers, scene_profile=args.scene_profile,
         optimizer_steps=optimizer_steps, inner_epochs=inner_epochs,
         lr=lr, sanity_M=sanity_M,
+        K=(SP.ADAPTIVE_PROPOSAL_K if args.adaptive_k64 else SP.K),
+        B=SP.B,
+        acquisition_mode=("adaptive_k64" if args.adaptive_k64 else "fixed_b4"),
+        max_queries=(SP.ADAPTIVE_MAX_QUERIES if args.adaptive_k64 else SP.B),
     )
     run_arm(args.checkpoint, args.outdir, cfg, ell=args.ell, cap=args.cap, device=args.device)
 

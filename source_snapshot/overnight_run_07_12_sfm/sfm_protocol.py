@@ -27,6 +27,13 @@ GP_CAP = 512
 GP_RETAIN_QUANTILE = 0.75
 SANITY_M = 10
 
+# One-factor follow-up to the fixed K=16/B=4 acquisition control.  The model
+# still proposes learned windows only; the verifier is queried four at a time
+# and stops at the first admissible batch.
+ADAPTIVE_PROPOSAL_K = 64
+ADAPTIVE_QUERY_BATCH = 4
+ADAPTIVE_MAX_QUERIES = 64
+
 # Explicit environment metadata.  N_PED remains the legacy B1 expansion
 # constant; scientific evaluation selects one of the named profiles instead.
 TRAINING_ENVIRONMENT = SS.scene_profile("training")
@@ -52,6 +59,7 @@ DEPLOY_DOUBLE_SHIFT_EP0 = 250_000
 TEMPERATURE_SELECT_EP0 = 300_000
 CURVE_SCREEN_EP0 = 320_000
 FINAL_CONFIRM_EP0 = 400_000
+ADAPTIVE_CONFIRM_EP0 = 500_000
 
 
 def expansion_scenarios(round_i, *, smoke=False):
