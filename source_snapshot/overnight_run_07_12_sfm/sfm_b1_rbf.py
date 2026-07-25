@@ -211,7 +211,10 @@ class RBFGP:
             probability = weights / weights.sum()
             local = int(torch.multinomial(probability, 1, generator=generator).item())
             chosen = int(remaining[local])
-            ess = float(1.0 / (probability.to(torch.float64).square().sum() * len(probability)))
+            probability64 = probability.detach().cpu().to(torch.float64)
+            ess = float(
+                1.0 / (probability64.square().sum() * len(probability64))
+            )
             trace.append(dict(
                 remaining=remaining.detach().cpu(), scores=scores.detach().cpu(),
                 probability=probability.detach().cpu(), chosen=chosen,
@@ -244,8 +247,9 @@ class RBFGP:
             probability = weights / weights.sum(dim=1, keepdim=True)
             local = torch.multinomial(probability, 1, generator=generator).squeeze(1)
             chosen = remaining.gather(1, local[:, None]).squeeze(1)
+            probability64 = probability.detach().cpu().to(torch.float64)
             ess = 1.0 / (
-                probability.to(torch.float64).square().sum(dim=1) * probability.shape[1]
+                probability64.square().sum(dim=1) * probability64.shape[1]
             )
             for context in range(context_count):
                 traces[context].append(dict(
@@ -294,13 +298,16 @@ class RBFGP:
 
 
 def normalized_ess(scores, beta):
-    scores = torch.as_tensor(scores, dtype=torch.float64)
+    scores = torch.as_tensor(scores).detach().cpu().to(torch.float64)
     probability = torch.softmax((scores - scores.max()) / float(beta), dim=0)
     return float(1.0 / (probability.square().sum() * len(probability)))
 
 
 def solve_beta(score_vectors, target=0.5, *, lower=1.0e-6, upper=10.0, iterations=80):
-    vectors = [torch.as_tensor(value, dtype=torch.float64) for value in score_vectors if len(value)]
+    vectors = [
+        torch.as_tensor(value).detach().cpu().to(torch.float64)
+        for value in score_vectors if len(value)
+    ]
     if not vectors:
         raise ValueError("beta calibration has no score vectors")
     def objective(beta):

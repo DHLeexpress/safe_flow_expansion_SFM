@@ -53,6 +53,10 @@ checkpoint, fixed-bank evidence, mechanism videos, and runtime provenance.
 - Raw evaluation always means the canonical generative policy: temperature 1,
   NFE 8, one sampled window per context, execute its first action, with no GP,
   verifier, selector, guidance, MPPI refinement, or fallback.
+- A reproducible local six-row mechanism video (ID/OOD SafeMPPI expert, the
+  three B1 execution selectors, and Kazuki with separate goal/safety arrows)
+  plus frame-indexed vector PDF export is documented in
+  [LOCAL_SIX_ROW_COMPARISON.md](LOCAL_SIX_ROW_COMPARISON.md).
 
 ## Repository lineage: same mechanism, different task
 

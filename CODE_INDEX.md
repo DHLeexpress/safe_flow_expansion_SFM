@@ -3,6 +3,19 @@
 All paths are relative to `source_snapshot/`. The snapshot preserves the
 original directory layout because the authenticated source uses `_paths.py`.
 
+## Local comparison-video tools
+
+- `scripts/sfm_compare.py`: collect or render the reusable six-row
+  SafeMPPI/B1/Kazuki comparison from explicit ID/OOD episode IDs and gamma
+  columns.
+- `scripts/sfm_snapshot.py`: rerender a selected stored-video frame as a vector
+  PDF without rerunning controllers.
+- `overnight_run_07_12_sfm/sfm_six_row_compare.py`: trace contract, exact
+  expert NVP gate, controller collection, fixed-layout renderer, and
+  frame-index mapping.
+- `LOCAL_SIX_ROW_COMPARISON.md`: complete commands, episode-bank contract, and
+  prompt template.
+
 ## Active SFM pipeline
 
 | file | role | blind spot / warning |

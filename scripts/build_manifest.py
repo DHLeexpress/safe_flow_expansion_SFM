@@ -50,7 +50,11 @@ def main() -> None:
         })
     payload = {
         "status": "SAFE_FLOW_EXPANSION_SFM_PACKAGE",
-        "source_lineage": "safeMPPI@e5ab47ba4971aae6c1df710c6d6864577f3728f7",
+        "source_lineage": (
+            "safe_flow_expansion_SFM@9b4305712d4d22b028a7c732cc6fc8d0641a651d"
+            " + selector trace integration from"
+            " safeMPPI@1e5ee41d6d951f236381cfb8fbc5d24c60305dd4"
+        ),
         "files": rows,
     }
     OUTPUT.write_text(json.dumps(payload, indent=2) + "\n")

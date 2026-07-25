@@ -23,8 +23,8 @@ import sfm_scene as SS
 GRAY = "#8c8c8c"
 ORANGE = "#E69F00"
 GREEN = "#009E73"
-RED = "#D55E00"
-BLUE = "#0072B2"
+RED = "#D62728"
+BLUE = "#0057FF"
 
 
 def halfspace_polygon(A, b, tol=1.0e-7):

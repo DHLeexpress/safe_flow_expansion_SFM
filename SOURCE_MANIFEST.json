@@ -1,6 +1,6 @@
 {
   "status": "SAFE_FLOW_EXPANSION_SFM_PACKAGE",
-  "source_lineage": "safeMPPI@e5ab47ba4971aae6c1df710c6d6864577f3728f7",
+  "source_lineage": "safe_flow_expansion_SFM@9b4305712d4d22b028a7c732cc6fc8d0641a651d + selector trace integration from safeMPPI@1e5ee41d6d951f236381cfb8fbc5d24c60305dd4",
   "files": [
     {
       "path": ".gitignore",
@@ -9,8 +9,8 @@
     },
     {
       "path": "CODE_INDEX.md",
-      "bytes": 5694,
-      "sha256": "6e76db4a65c324ca93fb2a0b70c4753c1189998e69e4bafd33d3ca9a62ffe7d0"
+      "bytes": 6262,
+      "sha256": "69fc6b7d61c6ccd13edde5bc47a0a8ba5822890d814887aefad6a76a467bd829"
     },
     {
       "path": "DATA_POINTER.json",
@@ -23,9 +23,14 @@
       "sha256": "5963748fa67f5a0377a4fd5c1bc56005474ff782b4d5d5a1cf151aa5a262cbe5"
     },
     {
+      "path": "LOCAL_SIX_ROW_COMPARISON.md",
+      "bytes": 4906,
+      "sha256": "cf120fd926ff81748f350e231cccadefa2a93542956b18f0ec639db006b8c21a"
+    },
+    {
       "path": "README.md",
-      "bytes": 23753,
-      "sha256": "d478e2c531fcc25cc532f959756b0adbe65a79a2698bdcdd93d3140e30a59a35"
+      "bytes": 24024,
+      "sha256": "4ad0462bf914d4ac0377c893b8df53be8d27f6a55a0a3a5141fccf5d2a01c770"
     },
     {
       "path": "REPOSITORY_LINEAGE.md",
@@ -304,8 +309,18 @@
     },
     {
       "path": "scripts/build_manifest.py",
-      "bytes": 1718,
-      "sha256": "6028ffdc2f760369f3eae0c1b48409fcc58b6772f87f627a847cb4c259911645"
+      "bytes": 1871,
+      "sha256": "486c198fcb9456105d8f379ae6d4d9b572d4c18468b8ba5430a1db004156db42"
+    },
+    {
+      "path": "scripts/sfm_compare.py",
+      "bytes": 453,
+      "sha256": "24c32198e8f5d95855d5891cc9320cf880d8b54dc11f019278ae50da2668793d"
+    },
+    {
+      "path": "scripts/sfm_snapshot.py",
+      "bytes": 931,
+      "sha256": "6b9ceaaf93289baa9d498dfae28d5105251befa81356ab0cf63b776df77fffd9"
     },
     {
       "path": "scripts/verify_package.py",
@@ -998,6 +1013,11 @@
       "sha256": "70ef2bc968ca85971403225c20a04759df309b979641e3446f9182a8e875b7b2"
     },
     {
+      "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_six_row_compare.py",
+      "bytes": 2639,
+      "sha256": "bb827e589d7da2435d613c8a2394912a5bac97d25ced01906a942a4b5eb88524"
+    },
+    {
       "path": "source_snapshot/overnight_run_07_12_sfm/grid_policy_sfm.py",
       "bytes": 5062,
       "sha256": "a021a6d6a48ccd3452a767d7f725bedc7c0346160a843e67c7fb3c40324f1b5b"
@@ -1028,14 +1048,24 @@
       "sha256": "633eb666f6c35ffa9e9039a6f749f8fa76503cb7a833f65c1552b93b66a88477"
     },
     {
+      "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_branch_compare_viz.py",
+      "bytes": 5767,
+      "sha256": "5cefa0ece14f15c9b9c4725c05be378399eae87798d1c63fcc105250b2661545"
+    },
+    {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_cost.py",
-      "bytes": 6884,
-      "sha256": "9020d73f79bcd0d4c45a61aab62f32237292faa68f76827ac25497ca19b32493"
+      "bytes": 7727,
+      "sha256": "88c6d148c3ea59bc1112f9a37a24bb4806ca487b4802d733a631300e1ed3c922"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_curve_eval.py",
       "bytes": 47847,
       "sha256": "25735ad96d9494f89292b38c1c42f3e9049f5000448fb23d49e1233fedd39434"
+    },
+    {
+      "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_d_branch_viz.py",
+      "bytes": 10942,
+      "sha256": "1aa73b42415bc55063c6b17c6ff979e68dc2a391c9ac909a30ffca60c0e06cc2"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_density_diagnostic.py",
@@ -1044,8 +1074,8 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_density_viz.py",
-      "bytes": 49154,
-      "sha256": "703d394a5be78e49b488f4216374e29cb89eb27d408b231c472d61b22118f430"
+      "bytes": 50773,
+      "sha256": "fffa18006104542614799002647d55cac237935e2c58cde8fae2b6893a15b9dd"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_deploy_driver.py",
@@ -1068,6 +1098,16 @@
       "sha256": "3605b617f1040fa4420691da76292a1080852ad0da64aaaab53f9a78c143c4ed"
     },
     {
+      "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_full_episode_audit.py",
+      "bytes": 23990,
+      "sha256": "28a2992143f83a15eade9368be9d88b009717edfd85bbf034cd07ac43f872c32"
+    },
+    {
+      "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_full_episode_viz.py",
+      "bytes": 10993,
+      "sha256": "a20ab82c11f510303bacbfadf348285befb6aa099e09bf77827fb4f300b036c6"
+    },
+    {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_method_viz.py",
       "bytes": 2604,
       "sha256": "ddce98d41f5b372aef9271e6e8de20024951fc659a13614581141b0bef2b61bc"
@@ -1079,8 +1119,8 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_rbf.py",
-      "bytes": 18668,
-      "sha256": "8370fa521c4415d94312b64541be76d7056607abb8ad8de38d7cb6ec915a81da"
+      "bytes": 18862,
+      "sha256": "c4873fca4d38154a5e9367e092b9c1477ed9c97f80dacb4676e5f47730d9244e"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_sharded_benchmark.py",
@@ -1100,7 +1140,7 @@
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_viz.py",
       "bytes": 23087,
-      "sha256": "50d5ac88aa4958ea9212209a858471cfc0f1dd9eb512b26d1491cef75593277f"
+      "sha256": "a53c9f1b28fc257ab60bc93c090ba7c2027b90a8f5f6ebf9685457d75b0cb73f"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_b1_viz_socp.py",
@@ -1119,8 +1159,8 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_kazuki.py",
-      "bytes": 69889,
-      "sha256": "bc8cff2487cc2619053c84c9b424bc7d2936901e0b0a651a95c0b8d6d004d21a"
+      "bytes": 71679,
+      "sha256": "7fea6519c571e404380e63cd6209a1fc9c0125b88f055f6bca9db9625e6e0419"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_metrics2.py",
@@ -1136,6 +1176,11 @@
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_scene.py",
       "bytes": 5207,
       "sha256": "fea1d3e0972d9df3487bb59c2cc435f96890ecbc1263af7d7c3d455d210d18a1"
+    },
+    {
+      "path": "source_snapshot/overnight_run_07_12_sfm/sfm_six_row_compare.py",
+      "bytes": 26598,
+      "sha256": "e8d0c722136cac3e8c27ccbedf2c69a97f73484193c3f540b478d373499a7952"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/stage3_pretrain_sfm.py",
@@ -1719,8 +1764,8 @@
     },
     {
       "path": "source_snapshot/overnight_run_today/src/flow_policy.py",
-      "bytes": 5519,
-      "sha256": "66edd96eafb327854afae7d63f0b36eb062d17166feb7109042012462fac7496"
+      "bytes": 6209,
+      "sha256": "072b907fa2adc1bfd69c1094cac7050ceadf91e7d82e3d97c5053f9d60014e66"
     },
     {
       "path": "source_snapshot/overnight_run_today/src/plots.py",
