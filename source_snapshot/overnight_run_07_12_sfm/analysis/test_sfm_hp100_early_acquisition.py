@@ -135,6 +135,15 @@ def test_batched_sampling_preserves_base_std_scaling():
     assert torch.equal(base2[1], 2.0 * base1[1])
 
 
+def test_same_lineage_seed_pairs_base_noise_exactly_across_gamma():
+    adapter = _Adapter()
+    contexts = [torch.tensor([0.0, .1]), torch.tensor([0.0, 1.0])]
+    _, bases, _, _ = E._sample_blocks(
+        adapter, contexts, (77, 77), K=8, flow_base_std=2.0,
+    )
+    assert torch.equal(bases[0], bases[1])
+
+
 @pytest.mark.parametrize("K,B", [(0, 1), (2, 0), (2, 3)])
 def test_invalid_candidate_budgets_fail(K, B):
     with pytest.raises(ValueError):

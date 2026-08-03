@@ -165,8 +165,17 @@ def _plan_diagnostics(candidates: torch.Tensor, u_max: float) -> dict:
 def _summary(lineages: Sequence[dict], query_rows: Sequence[dict], max_steps: int) -> dict:
     def one(rows: Sequence[dict], queries: Sequence[dict]) -> dict:
         nvp_times = [row["nvp_step"] for row in rows if row["status"] == "nvp"]
-        # Non-NVP lineages are right-censored at max_steps for the NVP clock.
-        nvp_clock = [row["nvp_step"] if row["status"] == "nvp" else max_steps for row in rows]
+        # Success/cutoff are favorable right-censoring. Collision/OOB terminate
+        # gathering at their actual executed lifetime and must not rank as survival.
+        gather_clock = [
+            max_steps if row["status"] in {"success", "cutoff"}
+            else row["executed_steps"]
+            for row in rows
+        ]
+        nvp_clock = [
+            row["nvp_step"] if row["status"] == "nvp" else max_steps
+            for row in rows
+        ]
         positive = sum(row["y"] == 1 for row in queries)
         negative = sum(row["y"] == 0 and not row["error"] for row in queries)
         errors = sum(bool(row["error"]) for row in queries)
@@ -184,8 +193,16 @@ def _summary(lineages: Sequence[dict], query_rows: Sequence[dict], max_steps: in
             "status_counts": dict(sorted(Counter(row["status"] for row in rows).items())),
             "S30": float(survived_30 / len(rows)) if rows else None,
             "survived_30_count": int(survived_30),
-            "RMST_to_max_steps": float(np.mean(nvp_clock)) if rows else None,
-            "right_censored_nvp_clock_median": float(np.median(nvp_clock)) if rows else None,
+            "early_gather_RMST_to_max_steps": (
+                float(np.mean(gather_clock)) if rows else None
+            ),
+            "executed_steps": {
+                "mean": float(np.mean([row["executed_steps"] for row in rows])),
+                "median": float(np.median([row["executed_steps"] for row in rows])),
+            } if rows else {"mean": None, "median": None},
+            "right_censored_nvp_clock_median": (
+                float(np.median(nvp_clock)) if rows else None
+            ),
             "nvp_step": {
                 "count": len(nvp_times),
                 "q25": (float(np.quantile(nvp_times, .25)) if nvp_times else None),
@@ -371,11 +388,14 @@ def run_diagnostic(
                 positive_count = 0
                 queried_cpu = prepared_row["queried"].detach().cpu()
                 for local, (candidate_id, result) in enumerate(zip(selected, results)):
-                    y = int(bool(result.valid and result.progress_eligible))
+                    y = int(bool(result.valid))
                     positive_count += y
                     query_rows.append(identity | {
                         "candidate_id": int(candidate_id), "selected_slot": local,
                         "y": y, "error": bool(result.error),
+                        "execution_eligible": bool(
+                            result.valid and result.progress_eligible
+                        ),
                         "chosen": bool(local == chosen),
                         "native_cost": float(result.execution_cost),
                         "step_margin": float(result.step_margin),
@@ -394,6 +414,9 @@ def run_diagnostic(
                             for result in audit_results[index]
                         )
                         nvp_cause = "acquisition_miss" if oracle_positive else "proposal_failure"
+                    elif B == K:
+                        oracle_positive = False
+                        nvp_cause = "proposal_failure"
                     else:
                         nvp_cause = "selected_B_all_negative"
                     episode["status"] = "nvp"
@@ -447,6 +470,11 @@ def run_diagnostic(
             "round1_note": (
                 "empty GP: marginal sigma is constant, marginal ESS/K=1, uplift=0; "
                 "only sequential within-B RBF conditioning diversifies later draws"
+            ),
+            "batched_sampling_numerics": (
+                "CRN bases are exact; one batched GPU flow solve is mathematically "
+                "equivalent to production per-context solves but floating-point GEMM "
+                "batch shape may change plans/phi at approximately 1e-6"
             ),
             "execution_rule": execution_rule,
             "execution_step_margin_weight": step_margin_weight,
