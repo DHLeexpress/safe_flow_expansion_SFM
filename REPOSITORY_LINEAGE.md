@@ -1,5 +1,14 @@
 # Repository lineage
 
+## Current canonical milestone (2026-08-02)
+
+The standalone SFM package now promotes the HP100 v3 pretrained baseline:
+10x32x100 current-tangent Hp history, 16 nominal support faces, shared clipped
+action/velocity dynamics, and no predictive retreat. Its tiered source lineage
+is dataset collection `2671a944`, pretraining `e9164e5`, exact branch renderer
+`b659526`, and integrated snapshot `ef35f1f`. The earlier Hp10/B1 lineage below
+is retained as history, not as the current model contract.
+
 ## Answer to “when did the two repositories branch?”
 
 They did not branch in Git. There is no common Git ancestor between
@@ -35,7 +44,7 @@ Both repositories implement:
 | component | static sister | SFM repository |
 |---|---|---|
 | dynamics / scene | double integrator, fixed circular obstacles | robot plus moving SFM pedestrians |
-| observation | low7 + 32×32 nominal-polytope embedding | Hp10: 10×16×12 nominal signed-field history + low5 + control GRU |
+| observation | low7 + 32×32 nominal-polytope embedding | canonical HP100: 10×32×100 nominal signed-field history + low state + control GRU; legacy Hp10 used 10×16×12 |
 | global modes | U/R routes around fixed obstacle | left/right/yield interaction modes across scenarios |
 | verifier | fitted static trajectory polytope / SOCP-oriented checker | moving-face H10 certificate under constant-velocity pedestrians |
 | uncertainty memory | static B1 RBF mechanism | RBF W2, cap512, per-gamma q75 retention |

@@ -16,9 +16,9 @@ ROUNDS = 20
 SCENARIOS_PER_ROUND = 8
 N_PED = 20
 
-# Latest max-margin sweep contract.  Replay and GP memory are intentionally
-# separate: replay consumes every eligible W=2 query, whereas uncertainty uses
-# only the balanced high-uncertainty retention set.
+# Legacy Hp10/B1 study constants remain available because the standalone
+# package intentionally preserves and tests that completed lineage alongside
+# the canonical HP100 pretraining path. HP100 code does not consume them.
 SWEEP_LR = 1.0e-4
 OPTIMIZER_CHUNKS = 16
 INNER_EPOCHS = (1, 4, 16)
@@ -26,10 +26,6 @@ GP_RETAIN_PER_ROUND = 256
 GP_CAP = 512
 GP_RETAIN_QUANTILE = 0.75
 SANITY_M = 10
-
-# One-factor follow-up to the fixed K=16/B=4 acquisition control.  The model
-# still proposes learned windows only; the verifier is queried four at a time
-# and stops at the first admissible batch.
 ADAPTIVE_PROPOSAL_K = 64
 ADAPTIVE_QUERY_BATCH = 4
 ADAPTIVE_MAX_QUERIES = 64
@@ -45,6 +41,10 @@ LEGACY_VELOCITY_OOD_ENVIRONMENT = SS.scene_profile("legacy_velocity_ood")
 
 # Demonstrations are below 8,000. Every named bank is mutually disjoint.
 PRETRAIN_GATE_EP0 = 12_000
+# A second matched-ID bank used only after the M10 pretraining screen.  Its
+# episode IDs are disjoint from both the demonstration attempts (< 5,000) and
+# the screen above.
+PRETRAIN_CONFIRM_EP0 = 14_000
 EXPANSION_EP0 = 20_000
 SCREEN_EP0 = 50_000
 CONFIRM_EP0 = 80_000

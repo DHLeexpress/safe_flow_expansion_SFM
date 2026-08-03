@@ -1,73 +1,74 @@
-# SFM result and next falsifiable arm — 2026-07-22
+# Latest canonical result: HP100 pretrained r0
+
+Date: 2026-08-02
 
 ## Verdict
 
-The moving-crowd goal has **not** been achieved. The selected
-`margin_alpha0p001_inner016@r3` checkpoint produced the following untouched
-canonical temperature-one M100-per-gamma result on
-`double_density_velocity_ood`:
+The newly promoted HP100 model is a strong matched-ID raw policy and a useful,
+non-saturated OOD starting point. It was trained from scratch on the corrected
+SafeMPPI demonstration contract and selected without reading any OOD result.
+Safe Flow Expansion has not yet been run or validated on this architecture.
 
-| SR | CR | timeout | trajectory-level \(V_{\rm safe}\) | successful clearance | successful time |
-|---:|---:|---:|---:|---:|---:|
-| 66.57% | 32.57% | 0.86% | 0.00% | 0.116 m | 8.85 s |
+| distribution | SR | CR | timeout | Validity | successful clearance | successful time |
+|---|---:|---:|---:|---:|---:|---:|
+| matched ID, M50/gamma | 95.71% | 4.29% | 0% | 79.06% | 0.301 m | 5.62 s |
+| double-density/double-speed OOD, M50/gamma | 56.00% | 43.71% | 0.29% | 47.69% | 0.109 m | 7.15 s |
 
-The locked per-gamma temperature vector was worse (SR 65.86%, CR 33.29%). The
-target CR below 5% was not reached, and the result did not beat the earlier
-pretrained or Kazuki measurements. Those earlier measurements used a different
-M100 bank, so the completed run also cannot make a strict paired improvement
-claim until r0 and Kazuki are evaluated on its exact final bank.
+Both rows use the same raw contract: temperature 1, NFE 8, one sampled H10
+window per context, first-action execution, and no verifier selection,
+guidance, MPPI refinement, fallback, or privileged controller.
 
-## What the nine-arm sweep actually established
+## Promoted model
 
-- Replay exposure showed the clearest association with transient M10 changes;
-  alpha had no consistent benefit and no alpha fixed the mismatch. Most
-  low-exposure arms selected r0 itself, and the apparent M50 winner did not
-  reproduce on M100.
-- Negative replay at \(\alpha\in\{10^{-3},10^{-2}\}\) did not convert local
-  verifier positives into raw closed-loop safety.
-- Across the nine arms, 10,078 of 10,080 gathering lineages ended in NVP after
-  a median of 8–9 actions. Nevertheless each arm stored roughly 40k full-H
-  positive windows. The replay target was therefore dominated by locally safe
-  prefixes from trajectories that did not remain executable.
-- An audit of the selected arm's NVP contexts found no nominal-\(H_P\)-gate or
-  solver failures. At rounds 1–3, verifying the unselected 12 plans rescued only
-  10–17 of 56 NVP contexts; 39–46 contexts had no admissible candidate in the
-  saved \(K=16\) pool. The dominant observed category is finite-pool exhaustion,
-  not the max-margin tie-break; the audit cannot distinguish proposal scarcity
-  from genuine state/H10 infeasibility.
-- The recorded late-round “uplift” compares sequentially conditioned selected
-  sigma with pre-acquisition pool sigma, so its negative value is not a clean
-  acquisition comparison. Future diagnostics must log base-sigma uplift and
-  pending-conditioned sigma separately.
+- File: `checkpoints/hp100_pretrained_r0_258999ae.pt`
+- SHA-256: `258999ae8ccee8aec5aab92a6f751221d3c15583ac26e0a7ec8311f13316ec44`
+- Selected epoch: 119
+- Architecture: `v3-sfm-hp100-residual`
+- Input: 10x32x100 Hp history, GRU-16 robot-control history, low state
+- Dynamics: componentwise action and velocity caps at 2 m/s2 and 2 m/s
+- Geometry: current-position tangent, `predict_gain=0`, 16 nominal faces
+- Promotion: ID validation plus fixed raw temperature-one ID banks only
 
-## Next arm
+The promoted container adds authenticated metadata, so its file hash is not
+expected to equal the intermediate `ckpt_119.pt` container hash. The promoted
+state dictionary and configuration are the selected epoch-119 model.
 
-The next single arm is
-`margin_alpha0p001_inner016_adaptiveK64`.
+## Dataset correction
 
-It keeps the selected learning recipe and max-margin execution fixed. At each
-context it draws 64 **learned flow** proposals, samples their query order
-sequentially without replacement under the same RBF Gibbs acquisition, and
-verifies four at a time. It stops at the first batch containing
-a full-H verifier-positive, nominal-\(H_P\)-admissible plan and executes the
-maximum one-step margin plan. NVP occurs only after the declared 64-query budget
-is exhausted. Every actually queried, successfully resolved result is stored;
-solver errors are logged separately and unqueried plans are not stored.
-There is no expert, template, fallback, recovery start, or hand-crafted plan.
+The new collection fills exactly 500 successful SafeMPPI lineages for every
+gamma, for 3,500 total. It stores all context provenance but admits a CFM
+target only when at least one of 2,048 expert proposals was accepted and the
+accepted-set weighted H10 plan independently passes the same frozen nominal
+polytope recheck. This leaves 201,075 eligible targets from 204,297 contexts.
 
-This is preferable to immediately labeling NVP predecessors as negative: NVP
-is censored finite-sample evidence, not proof that the preceding certified
-action was dynamically nonviable. Adaptive \(K=64\) specifically tests whether
-the observed K16 exhaustion was proposal scarcity or state/H10 infeasibility.
+The 32 angular observation rays and the 16 nominal-polytope faces are separate
+objects. No predictive-retreat face is used, and the 10x32x100 grid is rebuilt
+from raw state/pedestrian geometry rather than upsampled from Hp10.
 
-Run five rounds first because the previous winner peaked at r3. The evaluation
-must be canonical temperature one only and must compare r0 and the selected
-adaptive checkpoint on the identical M100 CRN bank. Required diagnostics are
-initial-batch success, rescue-query ranges 5–16/17–32/33–64, exhausted-K NVP,
-gate failures, verifier errors, realized queries per context, lineage length,
-base-sigma uplift, pending-conditioned sigma, and the usual D/D+, beta, ESS,
-raw SR/CR/validity/clearance/time.
+## Open objective
 
-The completed source, results, and checkpoint hashes are in
-`provenance/e5ab47b_alpha_epoch_sweep/`. The next-arm launcher and tests live in
-the source snapshot and must preserve the old fixed-B path bitwise.
+Port the existing B1/neutral Safe Flow Expansion mechanism additively to the
+HP100 model, using a head-only update arm and a newly calibrated HP100 RBF
+length scale. Establish a locked HP100 Kazuki comparator, prove r0 equivalence,
+then run a one-round OOD qualification before any multi-arm or long-round
+sweep. The detailed fail-closed protocol is in
+`CLAUDE_HP100_EXPANSION_HANDOFF.md`.
+
+Success must be measured on independent raw evaluation, not the acquisition
+controller: reduce OOD CR and increase Validity and successful clearance while
+retaining liveness and preserving ID behavior. A per-gamma temperature study,
+if used, requires a separate calibration bank followed by an untouched
+confirmation bank; temperature-one raw results remain mandatory.
+
+## Evidence
+
+- `provenance/hp100_pretrain_20260802/pretraining_report.json`
+- `provenance/hp100_pretrain_20260802/dataset_manifest.json`
+- `provenance/hp100_pretrain_20260802/id_m50.json`
+- `provenance/hp100_pretrain_20260802/ood_m50.json`
+- `assets/hp100_20260802/branch_viz/hp100_id_ood_branch.mp4`
+- `assets/hp100_20260802/expert_mechanism/hp100_safemppi_mechanism_g0p2_ep109.mp4`
+- `assets/hp100_20260802/data_provenance/hp100_expert_g0p2_ep109.mp4`
+
+The previous Hp10 result is preserved in
+`LEGACY_HP10_RESULT_20260722.md`; it is not the current baseline.

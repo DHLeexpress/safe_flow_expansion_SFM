@@ -1,5 +1,10 @@
 # Local six-row SFM comparison
 
+> **Legacy Hp10 tool.** This renderer is preserved for the July Hp10 lineage.
+> Its policy loader cannot admit the canonical HP100 checkpoint. Use the
+> bundled HP100 branch/mechanism videos or port the renderer explicitly before
+> claiming HP100 compatibility.
+
 This tool collects controller traces once, then renders both an MP4 and
 frame-indexed vector PDF snapshots without rerunning any controller. The
 bundled pretrained checkpoint is authenticated as:

@@ -51,9 +51,10 @@ def main() -> None:
     payload = {
         "status": "SAFE_FLOW_EXPANSION_SFM_PACKAGE",
         "source_lineage": (
-            "safe_flow_expansion_SFM@9b4305712d4d22b028a7c732cc6fc8d0641a651d"
-            " + selector trace integration from"
-            " safeMPPI@1e5ee41d6d951f236381cfb8fbc5d24c60305dd4"
+            "canonical HP100: dataset safeMPPI@2671a9447b7b914053dce5fe9be2a0aae6c67a8d"
+            " + pretraining safeMPPI@e9164e5a6e70b86cecae4660e7732f8ecc6a93f7"
+            " + branch renderer safeMPPI@b659526"
+            " + integrated snapshot safeMPPI@ef35f1f2df89a2131d9e0a21e0d7095a2d1d7b1d"
         ),
         "files": rows,
     }
