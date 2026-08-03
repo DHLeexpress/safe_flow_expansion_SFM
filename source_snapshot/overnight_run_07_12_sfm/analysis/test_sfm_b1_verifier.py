@@ -38,5 +38,5 @@ def test_worker_contract_has_no_legacy_theta_grid_argument():
                np.zeros((0, 2)), np.zeros((0, 2)), .5)
     context, candidate, result = M.verify_in_worker(payload)
     assert (context, candidate) == (3, 7)
-    assert result["diagnostics"]["solver"] == "exact_2d_angular_interval_socp"
+    assert result["diagnostics"]["solver"] == "paper_static_exact_2d_angular_interval_socp"
     assert result["diagnostics"]["K_artificial"] == 16

@@ -11,6 +11,7 @@ from sfm_metrics2 import (  # noqa: F401
     _is_feasible,
     _wrap,
     certify_moving_window,
+    solve_static_face,
     solve_moving_face,
     verify_in_worker,
     verify_query,

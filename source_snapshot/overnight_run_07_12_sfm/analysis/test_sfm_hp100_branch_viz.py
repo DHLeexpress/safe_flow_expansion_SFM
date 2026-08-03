@@ -131,7 +131,10 @@ def test_proposal_label_comes_from_raw_evaluator_and_retains_exact_geometry(monk
         V.VERIFY, "certify_moving_window",
         lambda segment, peds, gamma: (
             True, faces,
-            dict(solver="exact_2d_angular_interval_socp", K_artificial=16),
+            dict(
+                solver="paper_static_exact_2d_angular_interval_socp",
+                K_artificial=16,
+            ),
         ),
     )
     result = V.verify_raw_proposal(
@@ -150,7 +153,7 @@ def _face(a, margin, kind, label):
     )
 
 
-def test_green_geometry_covers_predicted_entrants_and_exactly_16_outer_faces():
+def test_green_geometry_covers_current_sensed_disks_and_exactly_16_outer_faces():
     artificial = [
         _face(
             [np.cos(2 * np.pi * index / 16), np.sin(2 * np.pi * index / 16)],
@@ -163,9 +166,9 @@ def test_green_geometry_covers_predicted_entrants_and_exactly_16_outer_faces():
         pedestrian_prediction=np.repeat(
             np.array([[[1.0, 0.0]]]), 11, axis=0,
         ),
-        faces=[_face([1., 0.], .5, "real-moving", "ped0"), *artificial],
+        faces=[_face([1., 0.], .5, "real", "ped0"), *artificial],
         diagnostics=dict(
-            solver="exact_2d_angular_interval_socp", K_artificial=16,
+            solver="paper_static_exact_2d_angular_interval_socp", K_artificial=16,
             R_eff=2.0,
         ),
     )
@@ -176,13 +179,22 @@ def test_green_geometry_covers_predicted_entrants_and_exactly_16_outer_faces():
     assert geometry["artificial_faces"] == 16
     assert geometry["real_face_labels"] == ["ped0"]
 
+    result["pedestrian_prediction"] = np.repeat(
+        np.array([[[1.0, 0.0]]]), 11, axis=0,
+    )
     result["faces"] = artificial
     try:
         V.verifier_geometry(dict(gamma=.5, proposal_result=result))
     except RuntimeError as error:
-        assert "omits" in str(error)
+        assert "current-sensed" in str(error)
     else:
         raise AssertionError("a sensed pedestrian omitted by GREEN must fail")
+
+    result["pedestrian_prediction"] = np.linspace(
+        [2.3, 0.0], [1.0, 0.0], 11,
+    )[:, None, :]
+    geometry = V.verifier_geometry(dict(gamma=.5, proposal_result=result))
+    assert geometry["real_face_labels"] == []
 
 
 def test_zero_step_collision_is_rendered_without_inventing_a_branch():

@@ -31,7 +31,8 @@ def _result(positive, scale=1.0):
         resolved=True, y=int(positive), full_h=True, terminal_step=10,
         segment=_segment(scale), faces=list(SQUARE),
         diagnostics=dict(
-            worst_t=4, solver="exact_2d_angular_interval_socp", K_artificial=16,
+            worst_t=4, solver="paper_static_exact_2d_angular_interval_socp",
+            K_artificial=16,
         ),
     )
 

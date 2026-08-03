@@ -358,7 +358,7 @@ def verifier_geometry(trace: dict) -> dict:
     if int(result.get("y", 0)) != 1 or not result.get("resolved", False):
         raise ValueError("GREEN geometry is defined only for a positive raw proposal")
     diagnostics = result["diagnostics"]
-    if diagnostics.get("solver") != "exact_2d_angular_interval_socp":
+    if diagnostics.get("solver") != "paper_static_exact_2d_angular_interval_socp":
         raise ValueError("GREEN geometry requires the exact analytic solver")
     if int(diagnostics.get("K_artificial", -1)) != VERIFY.ARTIFICIAL_FACES:
         raise ValueError("GREEN geometry requires exactly 16 artificial faces")
@@ -371,13 +371,13 @@ def verifier_geometry(trace: dict) -> dict:
     radius = float(diagnostics["R_eff"])
     expected_real = {
         f"ped{index}" for index in range(pedestrians.shape[1])
-        if float((np.linalg.norm(
-            pedestrians[:, index] - segment[0], axis=1,
-        ) - SS.R_PED).min()) <= radius
+        if float(np.linalg.norm(
+            pedestrians[0, index] - segment[0],
+        ) - SS.R_PED) <= radius
     }
-    actual_real = {face.label for face in faces if face.kind == "real-moving"}
+    actual_real = {face.label for face in faces if face.kind == "real"}
     if expected_real != actual_real:
-        raise RuntimeError("GREEN face set omits a sensed/predicted-entering pedestrian")
+        raise RuntimeError("GREEN face set differs from the current-sensed pedestrians")
     A = np.stack([np.asarray(face.a, float) for face in faces])
     margins = np.asarray([float(face.m) for face in faces])
     center = segment[0]
@@ -680,7 +680,7 @@ def build_bundle(
             ),
             green_geometry=(
                 "candidate-specific analytic verifier faces for every sensed or "
-                "predicted-entering pedestrian plus exactly 16 artificial outer faces"
+                "current-sensed pedestrian plus exactly 16 artificial outer faces"
             ),
         ),
     )

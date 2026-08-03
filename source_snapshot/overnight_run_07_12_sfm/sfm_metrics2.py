@@ -1,8 +1,12 @@
-"""Canonical exact moving-pedestrian full-H verifier for every B1 query.
+"""Canonical paper-faithful full-H verifier for every B1 query.
 
-For each real pedestrian and each artificial sensing-boundary disk, the face
-normal is solved exactly in two-dimensional angle space.  There is no angular
-grid.  The outer sensing boundary always uses exactly 16 canonical anchors.
+GREEN certification uses the current-time pedestrian disks inside the fixed
+finite sensing radius.  For each sensed disk and each of the 16 artificial
+outer-boundary disks, the positive max-margin SOCP block from the paper is
+solved exactly in two-dimensional angle space.  Pedestrian prediction is used
+separately for the physical collision check; it does not enlarge or move the
+GREEN verifier geometry.
+
 Visualization imports this module, so rendered certificates and training
 labels cannot silently use different solvers.
 """
@@ -13,6 +17,7 @@ import numpy as np
 
 import _paths  # noqa: F401
 import verifier_polytope as VP
+from demo_verifier_polytope import solve_face_interval as solve_paper_face_interval
 import sfm_scene as SS
 
 
@@ -22,11 +27,13 @@ ANGLE_TOL = 2.0e-10
 
 def verifier_manifest():
     return dict(
-        solver="exact_2d_angular_interval_socp", angular_grid=False,
+        solver="paper_static_exact_2d_angular_interval_socp", angular_grid=False,
         K_artificial=ARTIFICIAL_FACES, horizon=10, rho_art=0.16,
-        m_min=1.0e-4, r_pad=1.3,
-        effective_radius="max(sensing_radius, r_pad * max candidate displacement)",
-        pedestrian_prediction="constant velocity over t=0..H",
+        m_min=1.0e-4, sensing_radius=float(SS.R_SENSE),
+        effective_radius="fixed sensing_radius",
+        sensed_obstacles="current-time centers only",
+        nominal_relation="nominal radial face is feasible whenever its contraction gate holds",
+        pedestrian_prediction="constant velocity over t=0..H for collision check only",
     )
 
 
@@ -92,65 +99,44 @@ def _is_feasible(theta, inequalities, tol=2.0e-9):
                for vector, threshold in inequalities)
 
 
-def solve_moving_face(robot_centered, pedestrian_centered, radius, beta, label,
-                      *, m_min=1.0e-4, kind="real-moving"):
-    """Solve one independent positive max-margin moving-disk SOCP block."""
+def solve_static_face(robot_centered, obstacle_centered, radius, beta, label,
+                      *, m_min=1.0e-4, kind="real"):
+    """Solve one positive max-margin paper SOCP block for a static disk.
+
+    The exact angular solution is equivalent to
+
+    ``max m`` subject to ``a.T q_t <= beta_t m``,
+    ``r ||a|| <= a.T d - m``, ``||a|| <= 1``, and ``m >= m_min``.
+    With a positive objective an optimum has unit normal, so the disk
+    constraint is tight and ``m = a.T d - r``.
+    """
     robot = np.asarray(robot_centered, dtype=float).reshape(-1, 2)
-    pedestrian = np.asarray(pedestrian_centered, dtype=float).reshape(-1, 2)
+    obstacle = np.asarray(obstacle_centered, dtype=float).reshape(2)
     beta = np.asarray(beta, dtype=float).reshape(-1)
-    if len(robot) != len(pedestrian) or len(robot) != len(beta):
-        raise ValueError("moving face horizons do not align")
+    if len(robot) != len(beta):
+        raise ValueError("face trajectory and beta horizons do not align")
     if len(robot) < 2 or np.any(beta[1:] <= 0.0):
-        raise ValueError("moving face needs at least one positive-beta horizon")
+        raise ValueError("face needs at least one positive-beta horizon")
+    return solve_paper_face_interval(
+        obstacle, float(radius), robot, beta, coefficient=1.0,
+        kind=kind, label=label, m_min=float(m_min),
+    )
 
-    inequalities = [(center, float(radius) + float(m_min)) for center in pedestrian]
-    for horizon in range(1, len(robot)):
-        for center in pedestrian:
-            inequalities.append((
-                float(beta[horizon]) * center - robot[horizon],
-                float(beta[horizon]) * float(radius),
-            ))
 
-    endpoints = []
-    for vector, threshold in inequalities:
-        arc = _angular_constraint(vector, threshold)
-        if arc is None:
-            return VP.Face(np.array([1.0, 0.0]), 0.0, kind, label, feasible=False)
-        endpoints.extend(arc)
-
-    candidates = list(endpoints)
-    ordered = sorted(set([0.0] + [_wrap(value) for value in endpoints]))
-    cyclic = ordered + [ordered[0] + 2.0 * math.pi]
-    candidates.extend(_wrap(0.5 * (left + right)) for left, right in zip(cyclic, cyclic[1:]))
-    for center in pedestrian:
-        angle = math.atan2(float(center[1]), float(center[0]))
-        candidates.extend((_wrap(angle), _wrap(angle + math.pi)))
-    for first in range(len(pedestrian)):
-        for second in range(first + 1, len(pedestrian)):
-            delta = pedestrian[first] - pedestrian[second]
-            if float(np.linalg.norm(delta)) <= ANGLE_TOL:
-                continue
-            angle = math.atan2(float(delta[1]), float(delta[0])) + 0.5 * math.pi
-            candidates.extend((_wrap(angle), _wrap(angle + math.pi)))
-
-    feasible = []
-    for theta in candidates:
-        theta = _wrap(theta)
-        if _is_feasible(theta, inequalities):
-            normal = np.array([math.cos(theta), math.sin(theta)], dtype=float)
-            margin = float(np.min(pedestrian @ normal) - float(radius))
-            feasible.append((margin, theta, normal))
-    if not feasible:
-        return VP.Face(np.array([1.0, 0.0]), 0.0, kind, label, feasible=False)
-    margin, theta, normal = max(feasible, key=lambda row: (row[0], -row[1]))
-    return VP.Face(
-        normal, float(margin), kind, label, coefficient=1.0,
-        feasible=bool(margin >= float(m_min) - 2.0e-8), interval=None,
+def solve_moving_face(robot_centered, pedestrian_centered, radius, beta, label,
+                      *, m_min=1.0e-4, kind="real"):
+    """Compatibility wrapper using only the current-time obstacle center."""
+    centers = np.asarray(pedestrian_centered, dtype=float).reshape(-1, 2)
+    if not len(centers):
+        raise ValueError("pedestrian_centered is empty")
+    return solve_static_face(
+        robot_centered, centers[0], radius, beta, label,
+        m_min=m_min, kind=kind,
     )
 
 
 def certify_moving_window(segment, pedestrians, gamma, *, K=ARTIFICIAL_FACES,
-                          rho_art=0.16, m_min=1.0e-4, r_pad=1.3):
+                          rho_art=0.16, m_min=1.0e-4):
     if int(K) != ARTIFICIAL_FACES:
         raise ValueError(f"faithful B1 verifier requires K={ARTIFICIAL_FACES}")
     robot = np.asarray(segment, float)
@@ -161,13 +147,13 @@ def certify_moving_window(segment, pedestrians, gamma, *, K=ARTIFICIAL_FACES,
         raise ValueError("moving-window horizons do not align")
     center = robot[0]
     robot_c = robot - center
-    radius = max(float(SS.R_SENSE), float(r_pad) * float(np.linalg.norm(robot_c, axis=1).max()))
+    radius = float(SS.R_SENSE)
     if len(robot) == 1:
         # This generic helper also audits the zero-transition tail of an
         # already executed trajectory. Queried B1 plans never take this path:
         # verify_query below requires and certifies all H=10 transitions.
         return True, [], dict(
-            solver="exact_2d_angular_interval_socp", angular_grid=False,
+            solver="paper_static_exact_2d_angular_interval_socp", angular_grid=False,
             slack=float("inf"), worst_t=0, R_eff=float(radius),
             n_real=0, n_real_feasible=0, n_artificial=0,
             n_artificial_feasible=0, K_artificial=ARTIFICIAL_FACES,
@@ -177,24 +163,26 @@ def certify_moving_window(segment, pedestrians, gamma, *, K=ARTIFICIAL_FACES,
     beta = 1.0 - alpha
     faces = []
     for index in range(peds.shape[1]):
-        ped_c = peds[:, index] - center
-        if float((np.linalg.norm(ped_c, axis=1) - SS.R_PED).min()) <= radius:
-            faces.append(solve_moving_face(
-                robot_c, ped_c, SS.R_PED, beta, f"ped{index}", m_min=m_min,
+        ped_current_c = peds[0, index] - center
+        if float(np.linalg.norm(ped_current_c) - SS.R_PED) <= radius:
+            faces.append(solve_static_face(
+                robot_c, ped_current_c, SS.R_PED, beta, f"ped{index}",
+                m_min=m_min,
             ))
     for index, (x, y, obstacle_radius) in enumerate(
             VP.artificial_obstacles(radius, ARTIFICIAL_FACES, float(rho_art))):
-        repeated = np.repeat(np.array([[x, y]], dtype=float), len(robot_c), axis=0)
-        faces.append(solve_moving_face(
-            robot_c, repeated, obstacle_radius, beta, f"art{index}",
+        faces.append(solve_static_face(
+            robot_c, np.array([x, y]), obstacle_radius, beta, f"art{index}",
             m_min=m_min, kind="artificial",
         ))
     ok, slack, worst_t = VP.check_certificate(faces, robot_c, alpha, include_start=False)
-    real = [face for face in faces if face.kind == "real-moving"]
+    real = [face for face in faces if face.kind == "real"]
     artificial = [face for face in faces if face.kind == "artificial"]
     return bool(ok), faces, dict(
-        solver="exact_2d_angular_interval_socp", angular_grid=False,
+        solver="paper_static_exact_2d_angular_interval_socp", angular_grid=False,
         slack=float(slack), worst_t=int(worst_t), R_eff=float(radius),
+        sensing_radius=float(radius), rho_art=float(rho_art),
+        sensed_obstacles="current-time centers only",
         n_real=len(real), n_real_feasible=sum(bool(face.feasible) for face in real),
         n_artificial=len(artificial),
         n_artificial_feasible=sum(bool(face.feasible) for face in artificial),

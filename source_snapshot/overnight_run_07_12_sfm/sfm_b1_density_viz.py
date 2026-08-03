@@ -121,7 +121,7 @@ def checked_verifier_levels(trace, query_row, *, H=10):
     result = query_row["result"]
     faces = [face for face in result["faces"] if bool(face.feasible)]
     diagnostics = result.get("diagnostics", {})
-    if diagnostics.get("solver") != "exact_2d_angular_interval_socp":
+    if diagnostics.get("solver") != "paper_static_exact_2d_angular_interval_socp":
         raise ValueError("green verifier geometry requires the exact 2-D SOCP solver")
     if int(diagnostics.get("K_artificial", -1)) != VS.ARTIFICIAL_FACES:
         raise ValueError("green verifier geometry requires exactly 16 artificial outer faces")
@@ -880,7 +880,7 @@ def _validate_exact_query_traces(traces):
                 continue
             resolved += 1
             diagnostics = result.get("diagnostics", {})
-            if diagnostics.get("solver") != "exact_2d_angular_interval_socp":
+            if diagnostics.get("solver") != "paper_static_exact_2d_angular_interval_socp":
                 raise ValueError("query traces were not collected with the exact 2-D SOCP")
             if int(diagnostics.get("K_artificial", -1)) != VS.ARTIFICIAL_FACES:
                 raise ValueError("query traces do not use 16 artificial outer faces")
