@@ -299,10 +299,13 @@ def render_trace(
         for axis, gamma in zip(axes, GAMMAS):
             axis.clear()
             event = draw_lineage(axis, rows[gamma], int(frame))
+            status = event.get("status") or "active"
+            status = {"EARLY_CUTOFF": "cutoff", "nvp": "NVP"}.get(
+                status, status,
+            )
             axis.text(
                 .5, 1.01,
-                f"γ={gamma:g} · step={event['step']} · "
-                f"status={event.get('status') or 'active'}",
+                f"γ={gamma:g} | t={event['step']} | {status}",
                 transform=axis.transAxes, ha="center", va="bottom", fontsize=9,
             )
         figure.suptitle("HP100 early-acquisition executed-window branch audit", fontsize=11)
