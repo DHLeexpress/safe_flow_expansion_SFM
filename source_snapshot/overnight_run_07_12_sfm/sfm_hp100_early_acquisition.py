@@ -162,8 +162,11 @@ def _plan_diagnostics(candidates: torch.Tensor, u_max: float) -> dict:
     }
 
 
-def _summary(lineages: Sequence[dict], query_rows: Sequence[dict], max_steps: int) -> dict:
-    def one(rows: Sequence[dict], queries: Sequence[dict]) -> dict:
+def _summary(
+    lineages: Sequence[dict], query_rows: Sequence[dict], context_rows: Sequence[dict],
+    max_steps: int,
+) -> dict:
+    def one(rows: Sequence[dict], queries: Sequence[dict], contexts_for_group: Sequence[dict]) -> dict:
         nvp_times = [row["nvp_step"] for row in rows if row["status"] == "nvp"]
         # Success/cutoff are favorable right-censoring. Collision/OOB terminate
         # gathering at their actual executed lifetime and must not rank as survival.
@@ -184,6 +187,15 @@ def _summary(lineages: Sequence[dict], query_rows: Sequence[dict], max_steps: in
             (row["seed"], row["gamma"], row["replica"], row["step"])
             for row in queries if row["y"] == 1
         }
+        eligible_queries = [row for row in queries if row["execution_eligible"]]
+        chosen_queries = [row for row in queries if row["chosen"]]
+        one_step_progress = [
+            row["chosen_one_step_goal_progress"] for row in contexts_for_group
+            if row["chosen_one_step_goal_progress"] is not None
+        ]
+
+        def mean_or_none(values: Sequence[float]) -> float | None:
+            return float(np.mean(values)) if values else None
         survived_30 = sum(
             row["status"] == "success" or row["executed_steps"] >= 30
             for row in rows
@@ -220,14 +232,32 @@ def _summary(lineages: Sequence[dict], query_rows: Sequence[dict], max_steps: in
                     float(len(positive_contexts) / len(contexts)) if contexts else None
                 ),
             },
+            "goal_progress": {
+                "eligible_B_H10_mean": mean_or_none([
+                    row["H10_goal_progress"] for row in eligible_queries
+                ]),
+                "chosen_H10_mean": mean_or_none([
+                    row["H10_goal_progress"] for row in chosen_queries
+                ]),
+                "chosen_one_step_mean": mean_or_none(one_step_progress),
+                "chosen_native_cost_mean": mean_or_none([
+                    row["native_cost"] for row in chosen_queries
+                ]),
+                "chosen_step_margin_mean": mean_or_none([
+                    row["step_margin"] for row in chosen_queries
+                ]),
+            },
         }
 
-    pooled = one(lineages, query_rows)
+    pooled = one(lineages, query_rows, context_rows)
     by_gamma = {}
     for gamma in map(float, SS.GAMMAS):
         rows = [row for row in lineages if float(row["gamma"]) == gamma]
         queries = [row for row in query_rows if float(row["gamma"]) == gamma]
-        by_gamma[f"{gamma:g}"] = one(rows, queries)
+        contexts_for_gamma = [
+            row for row in context_rows if float(row["gamma"]) == gamma
+        ]
+        by_gamma[f"{gamma:g}"] = one(rows, queries, contexts_for_gamma)
     return {"pooled": pooled, "per_gamma": by_gamma}
 
 
@@ -399,6 +429,7 @@ def run_diagnostic(
                         "chosen": bool(local == chosen),
                         "native_cost": float(result.execution_cost),
                         "step_margin": float(result.step_margin),
+                        "H10_goal_progress": float(result.progress),
                         "selection_score": prepared_row["scores"][local],
                         "sigma": float(prepared_row["selected_sigma"][local]),
                         "candidate_sha256": _candidate_sha256(queried_cpu[local]),
@@ -407,6 +438,14 @@ def run_diagnostic(
 
                 oracle_positive = None
                 nvp_cause = None
+                eligible_progress = [
+                    float(result.progress) for result in results
+                    if result.valid and result.progress_eligible
+                ]
+                chosen_H10_progress = (
+                    None if chosen is None else float(results[chosen].progress)
+                )
+                chosen_one_step_progress = None
                 if chosen is None:
                     if index in audit_results:
                         oracle_positive = any(
@@ -422,8 +461,14 @@ def run_diagnostic(
                     episode["status"] = "nvp"
                     episode["nvp_step"] = step
                 else:
+                    robot_before, _, _ = task.decode_context(prepared_row["context"])
                     episode["state"] = task.advance(
                         episode["state"], prepared_row["queried"][chosen],
+                    )
+                    robot_after = np.asarray(episode["state"].robot, np.float32)
+                    chosen_one_step_progress = float(
+                        np.linalg.norm(np.asarray(robot_before[:2]) - SS.GOAL)
+                        - np.linalg.norm(robot_after[:2] - SS.GOAL)
                     )
                     episode["executed_steps"] += 1
                     episode["status"] = _terminal_status(task.terminal(episode["state"]))
@@ -435,6 +480,14 @@ def run_diagnostic(
                     "chosen_candidate_id": (
                         None if chosen is None else int(selected[chosen])
                     ),
+                    "eligible_B_H10_progress_mean": (
+                        float(np.mean(eligible_progress)) if eligible_progress else None
+                    ),
+                    "eligible_B_H10_progress_max": (
+                        float(np.max(eligible_progress)) if eligible_progress else None
+                    ),
+                    "chosen_H10_goal_progress": chosen_H10_progress,
+                    "chosen_one_step_goal_progress": chosen_one_step_progress,
                     "marginal_sigma_mean": float(prepared_row["sigma"].mean()),
                     "marginal_ESS_over_K": 1.0,
                     "conditional_ESS_over_remaining": list(map(float, prepared_row["conditional_ess"])),
@@ -485,7 +538,7 @@ def run_diagnostic(
         "policy_state_sha256_before": before_hash,
         "policy_state_sha256_after": after_hash,
         "policy_unchanged": True,
-        "summary": _summary(lineages, query_rows, max_steps),
+        "summary": _summary(lineages, query_rows, context_rows, max_steps),
         "nvp_audit": dict(sorted(causes.items())),
         "counts": {
             "selected_B_verifier_queries": verifier_candidates,

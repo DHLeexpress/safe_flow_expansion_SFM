@@ -44,6 +44,7 @@ class _State:
     scenario_id: int
     steps: int = 0
     status: str | None = None
+    robot: np.ndarray | None = None
 
 
 class _Task:
@@ -53,7 +54,10 @@ class _Task:
 
     def reset(self, gamma, episode, seed):
         self.reset_rows.append((float(gamma), int(episode), int(seed)))
-        return _State(scenario_id=300_000 + int(seed) % 1_000_000_000)
+        return _State(
+            scenario_id=300_000 + int(seed) % 1_000_000_000,
+            robot=np.zeros(4, np.float32),
+        )
 
     def context(self, state, gamma):
         return torch.tensor([float(state.steps), float(gamma)])
@@ -70,9 +74,14 @@ class _Task:
             for index in range(len(candidates))
         )
 
+    def decode_context(self, context):
+        del context
+        return np.zeros(4, np.float32), np.zeros((1, 2), np.float32), np.zeros((1, 2), np.float32)
+
     def advance(self, state, candidate):
         del candidate
         state.steps += 1
+        state.robot[0] += .01
         return state
 
     def terminal(self, state):
