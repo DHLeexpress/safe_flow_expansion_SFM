@@ -336,6 +336,11 @@ class ScoreLog:
                 else float(margin)
             )
             json_score = score if score is not None and np.isfinite(score) else None
+            progress = result.get("progress")
+            json_progress = (
+                None if progress is None or not np.isfinite(float(progress))
+                else float(progress)
+            )
             row = dict(
                 round=int(event["round"]), gamma=float(event["gamma"]),
                 context_id=int(event["context_id"]),
@@ -350,8 +355,11 @@ class ScoreLog:
                     and result.get("target_eligible", True)
                 ),
                 native_cost=json_cost, step_margin=json_margin,
-                combined_score=json_score,
+                H10_goal_progress=json_progress, combined_score=json_score,
                 chosen=bool(event["chosen_local"] == local),
+                archived_terminal_negative=bool(
+                    event.get("archived_negative_local") == local
+                ),
                 nvp_reason=event["nvp_reason"],
             )
             self.stream.write(json.dumps(row, allow_nan=False) + "\n")

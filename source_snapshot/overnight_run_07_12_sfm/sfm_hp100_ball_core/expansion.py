@@ -31,6 +31,7 @@ class ExpansionConfig:
     verifier_workers: int = 1
     max_retry_batches: int = 4
     max_steps: int = 100
+    max_steps_status: str = "TIMEOUT"
     K: int = 16
     B: int = 4
     batch_size: int = 32
@@ -40,6 +41,7 @@ class ExpansionConfig:
     first_layer_lr_scale: float = 1.0
     freeze_visual_encoder: bool = False
     head_only_update: bool = False
+    optimizer_scope: str = "configured_trainable"
     replay_rounds: int = 2
     gp_buffer_cap: int = 256
     gp_noise: float = 1.0e-2
@@ -71,6 +73,7 @@ class ExpansionConfig:
     replay_augmentation: str = "none"
     target_gate_start_round: int | None = None
     gp_reference_mode: str = "recent_current_phi"
+    gp_reference_rounds: int | None = None
     gp_sliding_row_selector: str = "trajectory_uniform"
     gp_exact_max_rows_per_gamma: int = 1024
 
@@ -81,6 +84,10 @@ class ExpansionConfig:
             raise ValueError(
                 "rounds, parallel_episodes, verifier_workers, "
                 "max_retry_batches, and max_steps must be positive"
+            )
+        if self.max_steps_status not in {"TIMEOUT", "EARLY_CUTOFF"}:
+            raise ValueError(
+                "max_steps_status must be TIMEOUT or EARLY_CUTOFF"
             )
         if not (1 <= self.B <= self.K):
             raise ValueError("require 1 <= B <= K")
@@ -93,6 +100,24 @@ class ExpansionConfig:
             raise ValueError("gp_noise, beta, and learning_rate must be positive")
         if not 0.0 < self.first_layer_lr_scale <= 1.0:
             raise ValueError("first_layer_lr_scale must lie in (0,1]")
+        if self.optimizer_scope not in {
+            "configured_trainable", "head_only", "last_block_and_head",
+        }:
+            raise ValueError(
+                "optimizer_scope must be configured_trainable, head_only, or "
+                "last_block_and_head"
+            )
+        if self.head_only_update and self.optimizer_scope != "configured_trainable":
+            raise ValueError(
+                "legacy head_only_update cannot be combined with optimizer_scope"
+            )
+        if (
+            (self.head_only_update or self.optimizer_scope != "configured_trainable")
+            and self.first_layer_lr_scale != 1.0
+        ):
+            raise ValueError(
+                "first_layer_lr_scale applies only to configured_trainable scope"
+            )
         if not 0.0 < self.ess_target <= 1.0 or self.negative_alpha < 0.0:
             raise ValueError("ess_target must lie in (0,1] and negative_alpha be nonnegative")
         if self.adaptive_beta and self.ess_target < 1.0 / self.K:
@@ -168,25 +193,25 @@ class ExpansionConfig:
                 "successful_trajectory_selector must be lowest_episode_id, "
                 "random_success, max_above_fraction, or max_mean_z"
             )
-        if self.successful_trajectories_per_gamma < 1:
+        if self.archive_rule == "successful_executed_windows":
+            if self.successful_trajectories_per_gamma < 1:
+                raise ValueError(
+                    "successful_trajectories_per_gamma must be positive for "
+                    "successful_executed_windows"
+                )
+            if (
+                self.successful_trajectories_per_gamma
+                > self.parallel_episodes * self.max_retry_batches
+            ):
+                raise ValueError(
+                    "successful_trajectories_per_gamma cannot exceed "
+                    "parallel_episodes * max_retry_batches"
+                )
+        elif self.successful_trajectories_per_gamma not in {0, 1}:
             raise ValueError(
-                "successful_trajectories_per_gamma must be positive"
-            )
-        if (
-            self.successful_trajectories_per_gamma
-            > self.parallel_episodes * self.max_retry_batches
-        ):
-            raise ValueError(
-                "successful_trajectories_per_gamma cannot exceed "
-                "parallel_episodes * max_retry_batches"
-            )
-        if (
-            self.archive_rule != "successful_executed_windows"
-            and self.successful_trajectories_per_gamma != 1
-        ):
-            raise ValueError(
-                "successful_trajectories_per_gamma only applies to "
-                "archive_rule=successful_executed_windows"
+                "successful_trajectories_per_gamma is inactive outside "
+                "successful_executed_windows and must be 0 (explicitly "
+                "disabled) or the legacy default 1"
             )
         if self.replay_acceptance not in {"execution_eligible", "safety_valid"}:
             raise ValueError(
@@ -224,7 +249,8 @@ class ExpansionConfig:
                 "sliding_success_per_gamma_frozen_phi",
                 "sliding_success_per_gamma_current_phi",
                 "sliding_positive_per_gamma_frozen_phi",
-                "sliding_positive_per_gamma_current_phi"}:
+                "sliding_positive_per_gamma_current_phi",
+                "sliding_executed_positive_per_gamma_frozen_phi"}:
             raise ValueError(
                 "gp_reference_mode must be recent_current_phi or "
                 "round1_fixed_frozen_phi or cumulative_accepted_frozen_phi or "
@@ -232,8 +258,16 @@ class ExpansionConfig:
                 "sliding_success_per_gamma_frozen_phi or "
                 "sliding_success_per_gamma_current_phi or "
                 "sliding_positive_per_gamma_frozen_phi or "
-                "sliding_positive_per_gamma_current_phi"
+                "sliding_positive_per_gamma_current_phi or "
+                "sliding_executed_positive_per_gamma_frozen_phi"
             )
+        if self.gp_reference_rounds is not None:
+            if self.gp_reference_rounds < 1:
+                raise ValueError("gp_reference_rounds must be positive")
+            if not self.gp_reference_mode.startswith("sliding_"):
+                raise ValueError(
+                    "gp_reference_rounds applies only to sliding GP modes"
+                )
         if self.gp_reference_mode == "cumulative_accepted_frozen_phi":
             gamma_count = len(self.gammas)
             if (self.acquisition_feature != "learned_phi"
@@ -269,11 +303,23 @@ class ExpansionConfig:
                     "preterminal positive per-gamma learned-phi GP modes require "
                     "preterminal_resolved_queries and learned_phi"
                 )
+        if self.gp_reference_mode == (
+            "sliding_executed_positive_per_gamma_frozen_phi"
+        ):
+            if (
+                self.archive_rule != "executed_plus_nvp_negative"
+                or self.acquisition_feature != "learned_phi"
+            ):
+                raise ValueError(
+                    "sliding executed-positive learned-phi GP mode requires "
+                    "executed_plus_nvp_negative and learned_phi"
+                )
         if self.gp_reference_mode in {
             "sliding_success_per_gamma_frozen_phi",
             "sliding_success_per_gamma_current_phi",
             "sliding_positive_per_gamma_frozen_phi",
             "sliding_positive_per_gamma_current_phi",
+            "sliding_executed_positive_per_gamma_frozen_phi",
         }:
             gamma_count = len(self.gammas)
             if (
@@ -561,10 +607,18 @@ class RBFPosterior:
         return diagonal.clamp_min(0.0).sqrt()
 
     @torch.no_grad()
-    def acquire(self, features: torch.Tensor, B: int, beta: float,
-        generator: torch.Generator) -> tuple[list[int], list[float], list[float]]:
-        covariance = self.covariance(features)
-        remaining = torch.arange(len(features), device=covariance.device)
+    def acquire_from_covariance(
+        self,
+        covariance: torch.Tensor,
+        B: int,
+        beta: float,
+        generator: torch.Generator,
+        *,
+        sampling_device: torch.device,
+    ) -> tuple[list[int], list[float], list[float]]:
+        """Sequentially acquire from a precomputed posterior covariance."""
+        covariance = covariance.clone()
+        remaining = torch.arange(len(covariance), device=covariance.device)
         selected, selected_sigma, ess = [], [], []
         for _ in range(B):
             # The Gibbs tilt is defined on posterior standard deviation, not variance.
@@ -575,9 +629,9 @@ class RBFPosterior:
             ).clamp_min(0.0).sqrt()
             weights = torch.exp(((scores - scores.max()) / beta).clamp(-30.0, 30.0))
             probability = weights / weights.sum()
-            if features.device.type == "mps":
+            if sampling_device.type == "mps":
                 uniform = float(torch.rand(
-                    (), device=features.device, generator=generator,
+                    (), device=sampling_device, generator=generator,
                 ).cpu())
                 local = min(
                     int(torch.searchsorted(
@@ -606,6 +660,14 @@ class RBFPosterior:
             covariance = 0.5 * (covariance + covariance.T)
             remaining = remaining[keep]
         return selected, selected_sigma, ess
+
+    @torch.no_grad()
+    def acquire(self, features: torch.Tensor, B: int, beta: float,
+        generator: torch.Generator) -> tuple[list[int], list[float], list[float]]:
+        return self.acquire_from_covariance(
+            self.covariance(features), B, beta, generator,
+            sampling_device=features.device,
+        )
 
 
 def normalized_ess(scores: torch.Tensor, beta: float) -> float:
@@ -1019,6 +1081,7 @@ def _sliding_success_gp_rows(
     *,
     through_round: int,
     selector: str = "trajectory_uniform",
+    reference_rounds: int | None = None,
 ) -> list[QueryRecord]:
     """Bounded deterministic support from exact-positive lineages, per gamma.
 
@@ -1038,6 +1101,13 @@ def _sliding_success_gp_rows(
         raise ValueError(
             "sliding GP selector must be trajectory_uniform or fifo_tail"
         )
+    if reference_rounds is not None and reference_rounds < 1:
+        raise ValueError("reference_rounds must be positive")
+    first_round = (
+        None
+        if reference_rounds is None
+        else int(through_round) - int(reference_rounds) + 1
+    )
     per_gamma_cap = total_cap // len(gamma_values)
 
     def fifo_key(row: QueryRecord) -> tuple[int, int, int, int, str, str]:
@@ -1059,6 +1129,7 @@ def _sliding_success_gp_rows(
                 if (
                     row.gamma == gamma
                     and row.round <= through_round
+                    and (first_round is None or row.round >= first_round)
                     and row.verification.valid
                     and not row.verification.error
                 )
@@ -1428,6 +1499,20 @@ def _softmin_choice(costs: Sequence[float], target: float,
     return choice, ess
 
 
+def _min_cost_score(
+    result: Verification,
+    step_margin_weight: float,
+) -> float:
+    if step_margin_weight > 0.0 and result.step_margin is None:
+        raise ValueError(
+            "execution_step_margin_weight requires verifier step_margin values"
+        )
+    return float(
+        result.execution_cost
+        - step_margin_weight * float(result.step_margin or 0.0)
+    )
+
+
 def perturb_plan_candidates(policy: ExpansionPolicy, candidates: torch.Tensor, std: float,
                             generator: torch.Generator,
                             scope: str = "coherent_horizon") -> torch.Tensor:
@@ -1608,8 +1693,23 @@ def _run_safe_expansion_impl(
                 "freeze_visual_encoder_for_expansion()"
             )
         freeze_visual_encoder()
-    if config.head_only_update:
+    effective_optimizer_scope = (
+        "head_only" if config.head_only_update else config.optimizer_scope
+    )
+    if effective_optimizer_scope == "head_only":
         optimizer_parameters = _head_only_parameters(policy)
+    elif effective_optimizer_scope == "last_block_and_head":
+        scoped_parameters = getattr(
+            policy, "expansion_optimizer_parameters", None,
+        )
+        if not callable(scoped_parameters):
+            raise TypeError(
+                "last_block_and_head requires a policy with "
+                "expansion_optimizer_parameters(scope)"
+            )
+        optimizer_parameters = list(scoped_parameters(effective_optimizer_scope))
+        if not optimizer_parameters:
+            raise ValueError("last_block_and_head returned no parameters")
     elif config.first_layer_lr_scale < 1.0:
         parameter_groups = getattr(policy, "expansion_parameter_groups", None)
         if not callable(parameter_groups):
@@ -1640,7 +1740,8 @@ def _run_safe_expansion_impl(
             "round1_fixed_frozen_phi", "cumulative_accepted_frozen_phi",
             "cumulative_success_per_gamma_frozen_phi_exact",
             "sliding_success_per_gamma_frozen_phi",
-            "sliding_positive_per_gamma_frozen_phi"}:
+            "sliding_positive_per_gamma_frozen_phi",
+            "sliding_executed_positive_per_gamma_frozen_phi"}:
         if config.acquisition_feature != "learned_phi":
             raise ValueError(
                 f"{config.gp_reference_mode} requires learned_phi acquisition"
@@ -1759,6 +1860,7 @@ def _run_safe_expansion_impl(
             "sliding_success_per_gamma_current_phi",
             "sliding_positive_per_gamma_frozen_phi",
             "sliding_positive_per_gamma_current_phi",
+            "sliding_executed_positive_per_gamma_frozen_phi",
         }:
             gp_rows = _sliding_success_gp_rows(
                 gp_evidence,
@@ -1766,6 +1868,7 @@ def _run_safe_expansion_impl(
                 config.gp_buffer_cap,
                 through_round=round_i - 1,
                 selector=config.gp_sliding_row_selector,
+                reference_rounds=config.gp_reference_rounds,
             )
             if any(row.round >= round_i for row in gp_rows):
                 raise RuntimeError(
@@ -1798,6 +1901,7 @@ def _run_safe_expansion_impl(
                 "sliding_success_per_gamma_current_phi",
                 "sliding_positive_per_gamma_frozen_phi",
                 "sliding_positive_per_gamma_current_phi",
+                "sliding_executed_positive_per_gamma_frozen_phi",
             }
         ):
             gp_by_gamma = {
@@ -1842,6 +1946,7 @@ def _run_safe_expansion_impl(
                 if config.archive_rule in {
                     "successful_executed_windows",
                     "preterminal_resolved_queries",
+                    "executed_plus_nvp_negative",
                 }:
                     reset_seed = _counter_seed(
                         config.seed, "reset", round_i, retry_batch, replica
@@ -2008,11 +2113,14 @@ def _run_safe_expansion_impl(
                 and round_i >= config.target_gate_start_round
             )
             current_records = {}
-            preterminal_trajectory_id = (
+            lineage_trajectory_id = (
                 _successful_trajectory_id(
                     round_i, gamma, int(episode["episode"])
                 )
-                if config.archive_rule == "preterminal_resolved_queries"
+                if config.archive_rule in {
+                    "preterminal_resolved_queries",
+                    "executed_plus_nvp_negative",
+                }
                 else None
             )
             for local, (candidate, result, acquisition_sigma) in enumerate(zip(
@@ -2050,19 +2158,19 @@ def _run_safe_expansion_impl(
                     replay_eligible=replay_eligible,
                     retry_batch=int(episode["retry_batch"]),
                     replica=int(episode["replica"]),
-                    trajectory_id=preterminal_trajectory_id,
+                    trajectory_id=lineage_trajectory_id,
                     window_id=(
                         _preterminal_query_id(
-                            preterminal_trajectory_id, step, local,
+                            lineage_trajectory_id, step, local,
                         )
-                        if preterminal_trajectory_id is not None else None
+                        if lineage_trajectory_id is not None else None
                     ),
                     window_start=(
-                        step if preterminal_trajectory_id is not None else None
+                        step if lineage_trajectory_id is not None else None
                     ),
                     valid_horizon=(
                         int(len(candidate))
-                        if preterminal_trajectory_id is not None else None
+                        if lineage_trajectory_id is not None else None
                     ),
                 )
                 current_records[local] = record
@@ -2132,9 +2240,13 @@ def _run_safe_expansion_impl(
                     if rejected:
                         archived_local = min(
                             rejected,
-                            key=lambda local: results[local].execution_cost,
+                            key=lambda local: _min_cost_score(
+                                results[local],
+                                config.execution_step_margin_weight,
+                            ),
                         )
                         current_records[archived_local].nvp_context = True
+                        current_records[archived_local].executed = False
                         archive.append(current_records[archived_local])
                 chosen = None
             else:
@@ -2201,23 +2313,11 @@ def _run_safe_expansion_impl(
                     execution_ess_values.append(execution_ess)
                     chosen = eligible[draw]
                 else:
-                    if (
-                        config.execution_step_margin_weight > 0.0
-                        and any(
-                            results[index].step_margin is None
-                            for index in eligible
-                        )
-                    ):
-                        raise ValueError(
-                            "execution_step_margin_weight requires verifier "
-                            "step_margin values"
-                        )
                     chosen = min(
                         eligible,
-                        key=lambda index: (
-                            results[index].execution_cost
-                            - config.execution_step_margin_weight
-                            * float(results[index].step_margin or 0.0)
+                        key=lambda index: _min_cost_score(
+                            results[index],
+                            config.execution_step_margin_weight,
                         ),
                     )
                 if config.archive_rule == "all_queries":
@@ -2228,7 +2328,20 @@ def _run_safe_expansion_impl(
                 }:
                     archive.append(current_records[chosen])
                 if chosen in current_records:
-                    current_records[chosen].executed = True
+                    chosen_record = current_records[chosen]
+                    chosen_record.executed = True
+                    if chosen_record.trajectory_id is not None:
+                        chosen_record.window_id = _successful_window_id(
+                            chosen_record.trajectory_id, step,
+                        )
+                    if config.gp_reference_mode == (
+                        "sliding_executed_positive_per_gamma_frozen_phi"
+                    ):
+                        if not chosen_record.verification.valid:
+                            raise RuntimeError(
+                                "executed-positive GP evidence must be exact-positive"
+                            )
+                        gp_evidence.append(chosen_record)
                 staged_executed_step = None
                 if config.archive_rule == "successful_executed_windows":
                     executed_candidate = queried[chosen].detach()
@@ -2300,7 +2413,7 @@ def _run_safe_expansion_impl(
                 episode["status"] is None
                 and int(episode["step"]) >= config.max_steps
             ):
-                episode["status"] = "TIMEOUT"
+                episode["status"] = config.max_steps_status
 
         while True:
             active = [episode for episode in episodes if episode["status"] is None]
@@ -2352,6 +2465,7 @@ def _run_safe_expansion_impl(
                 if config.archive_rule in {
                     "successful_executed_windows",
                     "preterminal_resolved_queries",
+                    "executed_plus_nvp_negative",
                 }:
                     gather_rng = torch.Generator(device=device).manual_seed(
                         _counter_seed(
@@ -2427,6 +2541,7 @@ def _run_safe_expansion_impl(
                             "sliding_success_per_gamma_current_phi",
                             "sliding_positive_per_gamma_frozen_phi",
                             "sliding_positive_per_gamma_current_phi",
+                            "sliding_executed_positive_per_gamma_frozen_phi",
                         }
                     ):
                         acquisition_gp = gp_by_gamma[gamma]
@@ -2436,11 +2551,20 @@ def _run_safe_expansion_impl(
                                 "learned_phi acquisition GP was not initialized"
                             )
                         acquisition_gp = shared_gp
-                sigma_k = acquisition_gp.sigma(features).detach().cpu()
+                acquisition_covariance = acquisition_gp.covariance(features)
+                sigma_k = (
+                    torch.diagonal(acquisition_covariance) - acquisition_gp.noise
+                ).clamp_min(0.0).sqrt().detach().cpu()
                 score_pools.append(sigma_k)
                 marginal_ess_values.append(normalized_ess(sigma_k, beta_used))
-                selected, selected_sigma, ess = acquisition_gp.acquire(
-                    features, config.B, beta_used, gather_rng
+                selected, selected_sigma, ess = (
+                    acquisition_gp.acquire_from_covariance(
+                        acquisition_covariance,
+                        config.B,
+                        beta_used,
+                        gather_rng,
+                        sampling_device=features.device,
+                    )
                 )
                 ess_values.extend(ess)
                 sigma_pool_means.append(float(sigma_k.mean()))
@@ -2479,7 +2603,10 @@ def _run_safe_expansion_impl(
             for prepared, results in zip(prepared_blocks, verified_blocks):
                 consume_verified(prepared, results)
         gather_s = time.perf_counter() - gather_started
-        statuses = [episode["status"] or "TIMEOUT" for episode in episodes]
+        statuses = [
+            episode["status"] or config.max_steps_status
+            for episode in episodes
+        ]
         if (
             config.archive_rule == "successful_executed_windows"
             and exhausted_retry_gammas
@@ -2930,6 +3057,7 @@ def _run_safe_expansion_impl(
                     "sliding_success_per_gamma_current_phi",
                     "sliding_positive_per_gamma_frozen_phi",
                     "sliding_positive_per_gamma_current_phi",
+                    "sliding_executed_positive_per_gamma_frozen_phi",
                 }
                 else None
             ),
@@ -2995,7 +3123,10 @@ def _run_safe_expansion_impl(
             ),
             "NVP": nvp,
             "success": statuses.count("SUCCESS"),
+            "collision": statuses.count("COLLISION"),
+            "oob": statuses.count("OOB"),
             "timeout": statuses.count("TIMEOUT"),
+            "early_cutoff": statuses.count("EARLY_CUTOFF"),
             "retry_batches_by_gamma": {
                 f"{gamma:.9g}": count
                 for gamma, count in retry_batches_by_gamma.items()
@@ -3032,7 +3163,7 @@ def _run_safe_expansion_impl(
         "D_replay_accepted": sum(row.replay_eligible for row in archive),
         "rounds": round_rows,
         "optimizer_scope": {
-            "mode": "head_only" if config.head_only_update else "configured_trainable",
+            "mode": effective_optimizer_scope,
             "trainable_parameter_names": trainable_parameter_names,
             "trainable_parameter_count": trainable_parameter_count,
         },
@@ -3078,6 +3209,11 @@ def _run_safe_expansion_impl(
                         "exact-positive preterminal selected-B queries, re-embedded "
                         "at each round by current endpoint phi"
                     ),
+                    "sliding_executed_positive_per_gamma_frozen_phi": (
+                        "separate per-gamma bounded posteriors over exact-positive "
+                        "plans actually selected for execution, embedded by frozen "
+                        "pretrained endpoint phi"
+                    ),
                 }[config.gp_reference_mode]
             ),
             "acquisition_feature": config.acquisition_feature,
@@ -3086,8 +3222,10 @@ def _run_safe_expansion_impl(
                 "all_queries": "all successful selected-B verifier queries",
                 "executed_only": "only the verifier-positive candidate selected for execution",
                 "executed_plus_nvp_negative": (
-                    "each executed positive plus at most one lowest-native-cost "
-                    "full-verifier reject at terminal NVP"
+                    "each executed positive plus at most one lowest min-cost-score "
+                    "full-verifier reject at terminal NVP; the score includes the "
+                    "declared execution step-margin weight and the reject is not "
+                    "marked executed"
                 ),
                 "successful_executed_windows": (
                     "all executed suffix starts reconstructed from "
@@ -3160,7 +3298,8 @@ def _run_safe_expansion_impl(
                 "all_queries": "recent selected-B full-verifier rejects",
                 "executed_only": "none: temporary non-executed queries never enter D",
                 "executed_plus_nvp_negative": (
-                    "at most one lowest-native-cost full-verifier reject per NVP rollout"
+                    "at most one lowest min-cost-score full-verifier reject per NVP "
+                    "rollout; it is a counterfactual D- row, never an executed or GP row"
                 ),
                 "successful_executed_windows": (
                     "none: NVP, collision, OOB, and timeout trajectories are "
@@ -3242,10 +3381,22 @@ def _run_safe_expansion_impl(
                                     if config.gp_reference_mode
                                     == "sliding_success_per_gamma_frozen_phi"
                                     else (
-                                        "bounded cumulative frozen-phi coreset "
-                                        "with equal gamma capacity, immutable "
-                                        "round-1 anchors, and deterministic "
-                                        "farthest-first adaptive discoveries"
+                                        (
+                                            "per-gamma bounded exact-positive "
+                                            "actually executed plans through the "
+                                            "previous round, with frozen pretrained "
+                                            "endpoint phi"
+                                        )
+                                        if config.gp_reference_mode == (
+                                            "sliding_executed_positive_per_gamma_"
+                                            "frozen_phi"
+                                        )
+                                        else (
+                                            "bounded cumulative frozen-phi coreset "
+                                            "with equal gamma capacity, immutable "
+                                            "round-1 anchors, and deterministic "
+                                            "farthest-first adaptive discoveries"
+                                        )
                                     )
                                 )
                                     )
@@ -3382,6 +3533,7 @@ def _run_safe_expansion_impl(
         "sliding_success_per_gamma_current_phi",
         "sliding_positive_per_gamma_frozen_phi",
         "sliding_positive_per_gamma_current_phi",
+        "sliding_executed_positive_per_gamma_frozen_phi",
     }:
         active_rows = list(gp_rows)
         per_gamma_cap = config.gp_buffer_cap // len(config.gammas)
@@ -3421,6 +3573,7 @@ def _run_safe_expansion_impl(
                 config.gp_reference_mode in {
                     "sliding_success_per_gamma_frozen_phi",
                     "sliding_positive_per_gamma_frozen_phi",
+                    "sliding_executed_positive_per_gamma_frozen_phi",
                 }
             ),
             "representation": (
@@ -3428,6 +3581,7 @@ def _run_safe_expansion_impl(
                 if config.gp_reference_mode in {
                     "sliding_success_per_gamma_frozen_phi",
                     "sliding_positive_per_gamma_frozen_phi",
+                    "sliding_executed_positive_per_gamma_frozen_phi",
                 }
                 else "current_round_phi_reembedded_before_gather"
             ),
@@ -3438,7 +3592,10 @@ def _run_safe_expansion_impl(
                 (
                     "original per-query sampled flow base paired with the exact "
                     "selected-B candidate"
-                    if config.archive_rule == "preterminal_resolved_queries"
+                    if config.archive_rule in {
+                        "preterminal_resolved_queries",
+                        "executed_plus_nvp_negative",
+                    }
                     else (
                         "concatenated actual first-action generator latents from "
                         "successive closed-loop decisions; terminal padding is zero"
@@ -3450,6 +3607,7 @@ def _run_safe_expansion_impl(
             "active_cap": config.gp_buffer_cap,
             "cap_scope": "equal_per_gamma",
             "per_gamma_cap": per_gamma_cap,
+            "reference_rounds": config.gp_reference_rounds,
             "row_selector": config.gp_sliding_row_selector,
             "eviction": (
                 (
@@ -3472,12 +3630,20 @@ def _run_safe_expansion_impl(
                     "and paired flow base"
                     if config.archive_rule == "preterminal_resolved_queries"
                     else (
-                        "every reverified available <=H suffix of actually executed "
-                        "controls from "
-                        f"{config.successful_trajectories_per_gamma} distinct "
-                        "commit-capable terminal SUCCESS trajectories per "
-                        "gamma/round; zero-padded for fixed-shape phi with "
-                        "valid-horizon CFM masks"
+                        (
+                            "every exact-positive H-plan actually selected for "
+                            "closed-loop execution before each lineage terminal "
+                            "event; terminal NVP negatives never enter the GP"
+                        )
+                        if config.archive_rule == "executed_plus_nvp_negative"
+                        else (
+                            "every reverified available <=H suffix of actually "
+                            "executed controls from "
+                            f"{config.successful_trajectories_per_gamma} distinct "
+                            "commit-capable terminal SUCCESS trajectories per "
+                            "gamma/round; zero-padded for fixed-shape phi with "
+                            "valid-horizon CFM masks"
+                        )
                     )
                 )
             ),
@@ -3505,6 +3671,7 @@ def _run_safe_expansion_impl(
         "sliding_success_per_gamma_current_phi",
         "sliding_positive_per_gamma_frozen_phi",
         "sliding_positive_per_gamma_current_phi",
+        "sliding_executed_positive_per_gamma_frozen_phi",
     }:
         torch.save(gp_evidence, output_dir / "gp_evidence.pt")
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2,

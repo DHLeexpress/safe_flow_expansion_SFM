@@ -73,6 +73,31 @@ def test_load_head_only_configures_and_asserts(monkeypatch):
     assert PORT.assert_head_only(adapter) == ["policy.head.bias", "policy.head.weight"]
 
 
+def test_last_block_and_head_scope_is_exact_and_freezes_everything_else():
+    policy = GPS.GridSFMHP100FlowPolicy()
+    adapter = PORT.HP100ExpansionPolicy(policy)
+    parameters = adapter.expansion_optimizer_parameters("last_block_and_head")
+    trainable = {
+        name for name, parameter in adapter.named_parameters()
+        if parameter.requires_grad
+    }
+    expected = {
+        *(f"policy.trunk.blocks.1.{name}"
+          for name, _ in policy.trunk.blocks[1].named_parameters()),
+        *(f"policy.head.{name}" for name, _ in policy.head.named_parameters()),
+    }
+    assert trainable == expected
+    assert {id(parameter) for parameter in parameters} == {
+        id(parameter) for parameter in adapter.parameters()
+        if parameter.requires_grad
+    }
+    assert sum(parameter.numel() for parameter in parameters) == 137_236
+    assert all(
+        not parameter.requires_grad
+        for parameter in policy.trunk.blocks[0].parameters()
+    )
+
+
 def test_rbf_calibration_uses_50_gamma_and_trajectory_balanced_training_contexts(
     monkeypatch,
 ):
@@ -280,7 +305,7 @@ def test_score_log_is_flat_lambda_input_and_reports_per_gamma_ess(tmp_path):
         verification=[
             dict(valid=True, error=False, progress_eligible=True,
                  target_eligible=True, execution_cost=10.0 + index,
-                 step_margin=0.1 * index)
+                 step_margin=0.1 * index, progress=0.25 * index)
             for index in range(4)
         ],
     )
@@ -291,6 +316,8 @@ def test_score_log_is_flat_lambda_input_and_reports_per_gamma_ess(tmp_path):
     assert rows[0]["context_id"] == 7
     assert rows[0]["native_cost"] == 10.0
     assert rows[1]["chosen"] is True
+    assert rows[1]["H10_goal_progress"] == 0.25
+    assert rows[1]["archived_terminal_negative"] is False
     assert "B" not in rows[0]
     report = LAUNCH.acquisition_audit(
         acquisition, {"rounds": [{"round": 2, "beta": 0.05}]},

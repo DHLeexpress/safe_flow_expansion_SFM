@@ -88,13 +88,14 @@ class _Task:
         return state.status
 
 
-def _run(task, *, K=2, B=1, std=1.0):
+def _run(task, *, K=2, B=1, std=1.0, event_callback=None):
     return E.run_diagnostic(
         _Adapter(), task, seeds=(2,), max_steps=30, K=K, B=B,
         flow_base_std=std, beta=1e-3, rbf_lengthscale=.5,
         rbf_noise=1e-2, execution_rule="max_step_margin",
         step_margin_weight=700_000.0, parallel_episodes=16,
         verifier_workers=1, audit_unselected_at_nvp=True,
+        event_callback=event_callback,
     )
 
 
@@ -129,6 +130,84 @@ def test_max_step_margin_uses_native_cost_only_as_tie_break():
     )
     assert chosen == 2
     assert scores == [-.1, -.2, -.2]
+
+
+def test_trace_event_distinguishes_executed_positive_from_terminal_counterfactual():
+    events = []
+    _run(_Task(positive_steps=1), event_callback=events.append)
+    first = next(row for row in events if row["gamma"] == .1 and row["replica"] == 0)
+    terminal = next(
+        row for row in events
+        if row["gamma"] == .1 and row["replica"] == 0 and row["step"] == 1
+    )
+    assert first["chosen_local"] == 0
+    assert first["archived_negative_local"] is None
+    assert first["verification"][0]["valid"] is True
+    assert terminal["chosen_local"] is None
+    assert terminal["archived_negative_local"] == 0
+    assert terminal["verification"][0]["valid"] is False
+    assert terminal["status"] == "nvp"
+    assert terminal["queried_segments"].shape == (1, 11, 2)
+
+
+def test_terminal_negative_uses_the_same_weighted_score_as_production():
+    events = []
+    _run(_Task(positive_steps=1), K=2, B=2, event_callback=events.append)
+    terminal = next(
+        row for row in events
+        if row["gamma"] == .1 and row["replica"] == 0 and row["step"] == 1
+    )
+    # Native costs are [0,1], margins are [0,.1], and lambda=700k.
+    assert terminal["archived_negative_local"] == 1
+
+
+def test_trace_marks_step_30_as_early_cutoff_not_active():
+    events = []
+    _run(_Task(positive_steps=100), event_callback=events.append)
+    final = next(
+        row for row in events
+        if row["gamma"] == .1 and row["replica"] == 0 and row["step"] == 29
+    )
+    assert final["status"] == "EARLY_CUTOFF"
+
+
+def test_retained_blue_branch_gets_exact_16_face_sidecar_only_after_filtering():
+    task = _Task(positive_steps=1)
+    events = []
+    _run(task, event_callback=events.append)
+    event = next(row for row in events if row["gamma"] == .1 and row["replica"] == 0)
+    calls = []
+
+    def verify_one(context, candidate, gamma):
+        calls.append((context, candidate, gamma))
+        result = task.verify(context, candidate[None], gamma)[0]
+        segment = E.PORT.clipped_plan_states(
+            np.zeros(4, np.float32), candidate.numpy(),
+        )[:, :2]
+        faces = [
+            dict(
+                a=[np.cos(2 * np.pi * index / 16), np.sin(2 * np.pi * index / 16)],
+                m=2.0, kind="artificial", label=f"art{index}",
+                coefficient=1.0, feasible=True, interval=None,
+            )
+            for index in range(16)
+        ]
+        return result, dict(result=dict(
+            resolved=True, y=1, full_h=True, segment=segment, faces=faces,
+            diagnostics=dict(
+                solver="paper_static_exact_2d_angular_interval_socp",
+                K_artificial=16,
+            ),
+        ))
+
+    task._verify_one = verify_one
+    attached = E._attach_exact_chosen_sidecar(task, event)
+    assert len(calls) == 1
+    assert "context" not in attached
+    assert len(attached["chosen_verifier_sidecar"]["faces"]) == 16
+    assert attached["chosen_verifier_sidecar"]["pedestrian_prediction"].shape == (
+        11, 1, 2,
+    )
 
 
 def test_batched_sampling_preserves_base_std_scaling():

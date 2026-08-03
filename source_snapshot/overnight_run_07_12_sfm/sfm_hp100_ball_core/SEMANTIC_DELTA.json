@@ -9,7 +9,7 @@
   },
   "patched_port": {
     "relative_path": "expansion.py",
-    "sha256": "bd5068dc8ec01e2f408f92000ce07c760df68b3e3313e7e2dc8750e5a4e652d2"
+    "sha256": "0f039757e85bc75524e398a8f3bf979bcd573f687f06c27ed088ce485f567cf4"
   },
   "semantic_deltas": [
     "Add opt-in preterminal_resolved_queries archive mode.",
@@ -18,7 +18,13 @@
     "Pair preterminal reset scenarios and flow-base lineages across gamma by the same counter-based round/replica/step coordinates.",
     "Add per-gamma sliding-positive GP modes with strict previous-round causality.",
     "Exclude exact-negative and verifier-error rows from GP support defensively.",
-    "Balance bounded GP support by gamma, then trajectory/lineage, then uniform time stage rather than query multiplicity."
+    "Balance bounded GP support by gamma, then trajectory/lineage, then uniform time stage rather than query multiplicity.",
+    "Add an opt-in executed-plus-terminal-NVP archive path whose D+ rows are exact-positive sampled H10 proposals selected for first-action execution and whose D- rows are resolved-invalid, explicitly unexecuted terminal counterfactuals.",
+    "Rank a terminal NVP counterfactual D- by the same J_native minus lambda times one-step margin score used for execution.",
+    "Add a frozen-phi, per-gamma sliding GP mode containing only prior-round executed D+ rows, with an optional explicit reference-round window.",
+    "Add an opt-in last-residual-block-plus-head optimizer scope while preserving every legacy optimizer scope.",
+    "Allow a deliberate finite early-acquisition horizon to terminate as EARLY_CUTOFF rather than scientific TIMEOUT.",
+    "Reuse each already-computed posterior covariance for marginal sigma and sequential without-replacement acquisition; this is a fixed-seed-equivalent performance change."
   ],
   "unchanged": [
     "Legacy archive and GP modes remain selectable.",

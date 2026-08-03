@@ -16,7 +16,7 @@ import math
 from pathlib import Path
 import sys
 import time
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
@@ -62,6 +62,55 @@ def model_state_sha256(module: torch.nn.Module) -> str:
 def _candidate_sha256(candidate: torch.Tensor) -> str:
     value = candidate.detach().cpu().to(torch.float32).contiguous().numpy()
     return hashlib.sha256(value.tobytes()).hexdigest()
+
+
+def _attach_exact_chosen_sidecar(
+    task: PORT.SFMHP100ExpansionTask,
+    event: dict,
+) -> dict:
+    """Reverify one retained blue branch and attach its exact GREEN geometry."""
+    chosen = event.get("chosen_local")
+    context = event.pop("context")
+    if chosen is None:
+        event["chosen_verifier_sidecar"] = None
+        return event
+    candidate = torch.from_numpy(
+        np.asarray(event["queried_controls"][int(chosen)], np.float32)
+    )
+    result, sidecar = task._verify_one(context, candidate, float(event["gamma"]))
+    original = event["verification"][int(chosen)]
+    if result.error or not result.valid or not original["valid"]:
+        raise RuntimeError("retained blue branch did not reproduce its exact positive label")
+    if not math.isclose(
+        float(result.execution_cost), float(original["execution_cost"]),
+        rel_tol=0.0, abs_tol=1.0e-7,
+    ):
+        raise RuntimeError("serial GREEN recheck changed the blue branch cost")
+    exact = sidecar["result"]
+    _, ped_xy, ped_vel = task.decode_context(context)
+    exact["pedestrian_prediction"] = PORT.VERIFY.predict_pedestrians(
+        ped_xy, ped_vel, H=len(candidate),
+    ).astype(np.float32, copy=False)
+    artificial = [
+        face for face in exact["faces"]
+        if face["kind"] == "artificial" and bool(face["feasible"])
+    ]
+    if (
+        not exact.get("resolved") or int(exact.get("y", 0)) != 1
+        or not exact.get("full_h")
+        or exact["diagnostics"].get("solver")
+        != "paper_static_exact_2d_angular_interval_socp"
+        or int(exact["diagnostics"].get("K_artificial", -1)) != 16
+        or len(artificial) != 16
+    ):
+        raise RuntimeError("retained blue branch lacks the exact 16-face GREEN certificate")
+    expected_segment = np.asarray(
+        event["queried_segments"][int(chosen)], np.float32,
+    )
+    if not np.array_equal(np.asarray(exact["segment"], np.float32), expected_segment):
+        raise RuntimeError("serial GREEN segment differs from the retained blue branch")
+    event["chosen_verifier_sidecar"] = exact
+    return event
 
 
 def _terminal_status(value: str | None) -> str | None:
@@ -279,6 +328,7 @@ def run_diagnostic(
     parallel_episodes: int,
     verifier_workers: int,
     audit_unselected_at_nvp: bool,
+    event_callback: Callable[[dict], None] | None = None,
 ) -> tuple[dict, list[dict], list[dict]]:
     if parallel_episodes != EXPECTED_PARALLEL_EPISODES:
         raise ValueError("canonical diagnostic requires exactly 16 lineages per gamma")
@@ -346,9 +396,15 @@ def run_diagnostic(
             for row, context, candidates, bases, features, generator in zip(
                 active, contexts, candidate_blocks, base_blocks, feature_blocks, generators,
             ):
-                sigma = posterior.sigma(features).detach().cpu()
-                selected, selected_sigma, conditional_ess = posterior.acquire(
-                    features, B, beta, generator,
+                covariance = posterior.covariance(features)
+                sigma = (
+                    torch.diagonal(covariance) - posterior.noise
+                ).clamp_min(0.0).sqrt().detach().cpu()
+                selected, selected_sigma, conditional_ess = (
+                    posterior.acquire_from_covariance(
+                        covariance, B, beta, generator,
+                        sampling_device=features.device,
+                    )
                 )
                 prepared.append({
                     "episode": row, "context": context, "candidates": candidates,
@@ -446,6 +502,11 @@ def run_diagnostic(
                     None if chosen is None else float(results[chosen].progress)
                 )
                 chosen_one_step_progress = None
+                robot_before, ped_xy, ped_vel = task.decode_context(
+                    prepared_row["context"]
+                )
+                robot_after = np.asarray(robot_before, np.float32).copy()
+                archived_negative_local = None
                 if chosen is None:
                     if index in audit_results:
                         oracle_positive = any(
@@ -460,12 +521,30 @@ def run_diagnostic(
                         nvp_cause = "selected_B_all_negative"
                     episode["status"] = "nvp"
                     episode["nvp_step"] = step
+                    rejected = [
+                        local for local, result in enumerate(results)
+                        if not result.error and not result.valid
+                    ]
+                    if rejected:
+                        # Match the production executed_plus_nvp_negative rule.
+                        # This is a counterfactual hard negative, never an
+                        # executed branch: NVP means selected-B had no positive.
+                        archived_negative_local = min(
+                            rejected,
+                            key=lambda local: (
+                                float(results[local].execution_cost)
+                                - float(step_margin_weight)
+                                * float(results[local].step_margin or 0.0),
+                                local,
+                            ),
+                        )
                 else:
-                    robot_before, _, _ = task.decode_context(prepared_row["context"])
                     episode["state"] = task.advance(
                         episode["state"], prepared_row["queried"][chosen],
                     )
-                    robot_after = np.asarray(episode["state"].robot, np.float32)
+                    robot_after = np.asarray(
+                        episode["state"].robot, np.float32,
+                    ).copy()
                     chosen_one_step_progress = float(
                         np.linalg.norm(np.asarray(robot_before[:2]) - SS.GOAL)
                         - np.linalg.norm(robot_after[:2] - SS.GOAL)
@@ -492,6 +571,43 @@ def run_diagnostic(
                     "marginal_ESS_over_K": 1.0,
                     "conditional_ESS_over_remaining": list(map(float, prepared_row["conditional_ess"])),
                 })
+                if event_callback is not None:
+                    queried_array = queried_cpu.numpy()
+                    trace_status = episode["status"]
+                    if trace_status is None and step + 1 == max_steps:
+                        trace_status = "EARLY_CUTOFF"
+                    event_callback({
+                        **identity,
+                        "K": int(K), "B": int(B),
+                        "context": prepared_row["context"].detach().cpu(),
+                        "state_before": np.asarray(robot_before, np.float32).copy(),
+                        "state_after": robot_after,
+                        "ped_xy": np.asarray(ped_xy, np.float32).copy(),
+                        "ped_vel": np.asarray(ped_vel, np.float32).copy(),
+                        "queried_candidate_ids": [int(value) for value in selected],
+                        "queried_controls": queried_array.copy(),
+                        "queried_segments": np.stack([
+                            PORT.clipped_plan_states(robot_before, candidate)[:, :2]
+                            for candidate in queried_array
+                        ]).astype(np.float32, copy=False),
+                        "verification": [
+                            {
+                                "valid": bool(result.valid),
+                                "error": bool(result.error),
+                                "execution_cost": float(result.execution_cost),
+                                "progress": float(result.progress),
+                                "step_margin": (
+                                    None if result.step_margin is None
+                                    else float(result.step_margin)
+                                ),
+                            }
+                            for result in results
+                        ],
+                        "chosen_local": None if chosen is None else int(chosen),
+                        "archived_negative_local": archived_negative_local,
+                        "status": trace_status,
+                        "nvp_cause": nvp_cause,
+                    })
             if step + 1 == max_steps:
                 for row in episodes:
                     if row["status"] is None:
@@ -578,11 +694,19 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--parallel-episodes", type=int, default=16)
     value.add_argument("--verifier-workers", type=int, default=16)
     value.add_argument("--no-audit-unselected-at-nvp", action="store_true")
+    value.add_argument(
+        "--trace-output",
+        help=(
+            "optional compact torch trace containing only replica 0 at "
+            "gamma 0.1/0.5/1.0; sufficient for offline branch rendering"
+        ),
+    )
     return value
 
 
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
+    seed_values = tuple(int(item) for item in args.seeds.split(","))
     output = Path(args.output).resolve()
     if output.exists():
         raise FileExistsError(f"refusing existing output root: {output}")
@@ -594,8 +718,21 @@ def main(argv=None) -> int:
         scene_profile=args.scene_profile, scenario_start=args.scenario_start,
     ).attach_context_encoder(adapter.policy)
     started = time.time()
+    trace_events: list[dict] = []
+
+    def retain_trace(event: dict) -> None:
+        if (
+            int(event["seed"]) == seed_values[0]
+            and int(event["replica"]) == 0
+            and any(
+                math.isclose(float(event["gamma"]), gamma, abs_tol=1.0e-7)
+                for gamma in (0.1, 0.5, 1.0)
+            )
+        ):
+            trace_events.append(_attach_exact_chosen_sidecar(task, event))
+
     payload, queries, contexts = run_diagnostic(
-        adapter, task, seeds=tuple(int(item) for item in args.seeds.split(",")),
+        adapter, task, seeds=seed_values,
         max_steps=args.max_steps, K=args.K, B=args.B,
         flow_base_std=args.flow_base_std, beta=args.beta,
         rbf_lengthscale=args.rbf_lengthscale, rbf_noise=args.rbf_noise,
@@ -604,6 +741,7 @@ def main(argv=None) -> int:
         parallel_episodes=args.parallel_episodes,
         verifier_workers=args.verifier_workers,
         audit_unselected_at_nvp=not args.no_audit_unselected_at_nvp,
+        event_callback=(retain_trace if args.trace_output else None),
     )
     payload["wall_seconds"] = time.time() - started
     payload["checkpoint"] = {
@@ -619,6 +757,47 @@ def main(argv=None) -> int:
         "selected_B": {"path": str(query_path), "sha256": APPROVAL.sha256_file(query_path)},
         "contexts": {"path": str(context_path), "sha256": APPROVAL.sha256_file(context_path)},
     }
+    if args.trace_output:
+        trace_path = Path(args.trace_output).resolve()
+        if trace_path.exists():
+            raise FileExistsError(f"refusing existing trace output: {trace_path}")
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        observed_gammas = sorted({float(row["gamma"]) for row in trace_events})
+        if observed_gammas != [0.1, 0.5, 1.0]:
+            raise RuntimeError(
+                f"trace does not cover the three declared gammas: {observed_gammas}"
+            )
+        trace_bundle = {
+            "status": "SFM_HP100_EARLY_BRANCH_TRACE_COMPLETE",
+            "version": "sfm_hp100_early_branch_trace_v1",
+            "checkpoint_sha256": checkpoint_sha,
+            "policy_state_sha256": payload["policy_state_sha256_after"],
+            "config": payload["config"],
+            "lineage_filter": {
+                "seed": seed_values[0], "replica": 0,
+                "gammas": [0.1, 0.5, 1.0],
+            },
+            "semantics": {
+                "green": "all and only the selected B exact-verifier queries",
+                "blue": (
+                    "exact-positive selected proposal whose clipped first action "
+                    "was executed; exact candidate-specific GREEN verifier faces "
+                    "and ten level sets are retained"
+                ),
+                "red": (
+                    "terminal NVP lowest J_native-lambda*m_step resolved-negative "
+                    "counterfactual archived for Dminus; never executed"
+                ),
+                "black": "actual closed-loop first-action state path",
+            },
+            "events": trace_events,
+        }
+        torch.save(trace_bundle, trace_path)
+        payload["artifacts"]["early_branch_trace"] = {
+            "path": str(trace_path),
+            "sha256": APPROVAL.sha256_file(trace_path),
+            "events": len(trace_events),
+        }
     marker = output / "EARLY_ACQUISITION_COMPLETE.json"
     _write_json(marker, payload)
     print(json.dumps({

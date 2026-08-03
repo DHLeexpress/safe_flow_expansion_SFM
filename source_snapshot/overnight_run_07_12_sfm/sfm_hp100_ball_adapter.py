@@ -93,8 +93,9 @@ class HP100ExpansionPolicy(nn.Module):
     """Translate compact archived conditioning tokens to the HP100 policy API.
 
     The task computes and archives the frozen 176-D conditioning token.  This
-    is exact only for the declared head-only arm; it avoids duplicating each
-    10x32x100 raster in every replay row.
+    is exact for scopes that freeze every conditioning encoder (head-only and
+    last-trunk-block-plus-head); it avoids duplicating each 10x32x100 raster in
+    every replay row.
     """
 
     def __init__(self, policy: GPS.GridSFMHP100FlowPolicy, *, nfe: int = NFE):
@@ -172,6 +173,26 @@ class HP100ExpansionPolicy(nn.Module):
         for parameter in parameters:
             parameter.requires_grad_(False)
         return sum(parameter.numel() for parameter in parameters)
+
+    def expansion_optimizer_parameters(
+        self, scope: str,
+    ) -> list[torch.nn.Parameter]:
+        """Apply the declared HP100 optimizer scope and return its parameters."""
+        if scope != "last_block_and_head":
+            raise ValueError(
+                "HP100 adapter optimizer scope must be last_block_and_head"
+            )
+        blocks = self.policy.trunk.blocks
+        if len(blocks) != 2:
+            raise RuntimeError(
+                "last_block_and_head requires the declared two-block HP100 trunk"
+            )
+        for parameter in self.policy.parameters():
+            parameter.requires_grad_(False)
+        parameters = [*blocks[1].parameters(), *self.policy.head.parameters()]
+        for parameter in parameters:
+            parameter.requires_grad_(True)
+        return parameters
 
     @property
     def head(self):

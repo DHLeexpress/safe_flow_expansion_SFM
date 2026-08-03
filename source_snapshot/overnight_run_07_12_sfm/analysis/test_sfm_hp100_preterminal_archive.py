@@ -9,6 +9,7 @@ from torch import nn
 from sfm_hp100_ball_core.expansion import (
     ExpansionConfig,
     QueryRecord,
+    RBFPosterior,
     Verification,
     _sliding_success_gp_rows,
     run_safe_expansion,
@@ -54,6 +55,29 @@ class _Policy(nn.Module):
         if reduction == "mean":
             return values.mean()
         raise ValueError(reduction)
+
+
+def test_precomputed_covariance_acquisition_is_fixed_seed_equivalent():
+    features = torch.tensor([
+        [1.0, 0.0], [0.7, 0.3], [0.0, 1.0], [-0.6, 0.8],
+    ])
+    gp = RBFPosterior(lengthscale=0.5, noise=0.01)
+    gp.set_buffer(torch.tensor([[1.0, 1.0], [-1.0, 0.0]]))
+    covariance = gp.covariance(features)
+    untouched = covariance.clone()
+    direct_rng = torch.Generator().manual_seed(123)
+    cached_rng = torch.Generator().manual_seed(123)
+
+    direct = gp.acquire(features, 3, 0.2, direct_rng)
+    cached = gp.acquire_from_covariance(
+        covariance, 3, 0.2, cached_rng, sampling_device=features.device,
+    )
+    assert cached == direct
+    assert torch.equal(covariance, untouched)
+    assert torch.allclose(
+        gp.sigma(features),
+        (torch.diagonal(covariance) - gp.noise).clamp_min(0).sqrt(),
+    )
 
 
 @dataclass
@@ -247,6 +271,116 @@ def test_sliding_gp_retains_older_rows_but_never_current_round():
     assert all(row.round < 2 for row in selected)
 
 
+def test_sliding_gp_can_limit_reference_to_recent_rounds():
+    rows = [
+        _record(gamma=0.5, trajectory=round_i, start=round_i, round_i=round_i)
+        for round_i in range(1, 5)
+    ]
+    selected = _sliding_success_gp_rows(
+        rows, (0.5,), 4, through_round=4,
+        selector="trajectory_uniform", reference_rounds=2,
+    )
+    assert {row.round for row in selected} == {3, 4}
+
+
+def test_executed_positive_gp_uses_only_chosen_plans_and_truthful_nvp_negative(
+    tmp_path,
+):
+    config = _config(
+        archive_rule="executed_plus_nvp_negative",
+        replay_acceptance="execution_eligible",
+        gp_reference_mode="sliding_executed_positive_per_gamma_frozen_phi",
+        gp_reference_rounds=1,
+        execution_step_margin_weight=2.0,
+    )
+    output = tmp_path / "executed"
+    manifest = run_safe_expansion(
+        _Policy(), _PreterminalTask(), output, config=config,
+    )
+    archive = torch.load(output / "query_archive.pt", weights_only=False)
+    evidence = torch.load(output / "gp_evidence.pt", weights_only=False)
+
+    assert len(archive) == 4
+    assert len(evidence) == 2
+    assert all(row.verification.valid and row.executed for row in evidence)
+    assert {row.window_id for row in evidence}.issubset(
+        {row.window_id for row in archive}
+    )
+    assert all(row.trajectory_id is not None for row in evidence)
+    assert all(row.window_start == 0 for row in evidence)
+    assert all(row.window_id.endswith(":w000000") for row in evidence)
+
+    negatives = [row for row in archive if not row.verification.valid]
+    assert len(negatives) == 2
+    assert all(row.nvp_context and not row.executed for row in negatives)
+    # Native costs prefer local query 0, but cost - 2*step_margin prefers 1.
+    assert all(row.verification.execution_cost == 1.0 for row in negatives)
+    assert all(row.verification.step_margin == 1.0 for row in negatives)
+    assert not {row.window_id for row in evidence}.intersection(
+        {row.window_id for row in negatives}
+    )
+    assert manifest["rounds"][0]["gp_buffer"] == 0
+    assert manifest["rounds"][1]["gp_buffer"] == 1
+    assert manifest["gp_reference"]["reference_rounds"] == 1
+
+
+def test_deliberate_gather_horizon_is_reported_as_early_cutoff(tmp_path):
+    class AlwaysValid(_PreterminalTask):
+        def verify(self, context, candidates, gamma):
+            del context, gamma
+            return [
+                Verification(
+                    valid=True, hp_eligible=True, margin=float(local),
+                    execution_cost=float(local), progress_eligible=True,
+                    error=False, step_margin=float(local),
+                )
+                for local in range(len(candidates))
+            ]
+
+    manifest = run_safe_expansion(
+        _Policy(), AlwaysValid(), tmp_path / "cutoff",
+        config=_config(
+            rounds=1, max_steps=1, max_steps_status="EARLY_CUTOFF",
+            archive_rule="executed_plus_nvp_negative",
+            replay_acceptance="execution_eligible",
+            gp_reference_mode=(
+                "sliding_executed_positive_per_gamma_frozen_phi"
+            ),
+            negative_alpha=0.0,
+        ),
+    )
+    assert manifest["rounds"][0]["early_cutoff"] == 1
+    assert manifest["rounds"][0]["timeout"] == 0
+
+
+def test_core_delegates_last_block_and_head_scope_without_refreezing(tmp_path):
+    class ScopedPolicy(_Policy):
+        def __init__(self):
+            super().__init__()
+            self.other = nn.Parameter(torch.tensor(1.0))
+            self.requested_scope = None
+
+        def expansion_optimizer_parameters(self, scope):
+            self.requested_scope = scope
+            self.weight.requires_grad_(True)
+            self.other.requires_grad_(False)
+            return [self.weight]
+
+    policy = ScopedPolicy()
+    manifest = run_safe_expansion(
+        policy, _PreterminalTask(), tmp_path / "scope",
+        config=_config(
+            rounds=1, optimizer_scope="last_block_and_head",
+        ),
+    )
+    assert policy.requested_scope == "last_block_and_head"
+    assert policy.weight.requires_grad and not policy.other.requires_grad
+    assert manifest["optimizer_scope"]["mode"] == "last_block_and_head"
+    assert manifest["optimizer_scope"]["trainable_parameter_names"] == [
+        "weight"
+    ]
+
+
 def test_preterminal_mode_cannot_silently_restore_success_only_filtering():
     _config().validate()
     with pytest.raises(ValueError, match="requires replay_acceptance=safety_valid"):
@@ -257,6 +391,14 @@ def test_preterminal_mode_cannot_silently_restore_success_only_filtering():
             negative_alpha=0.0,
             replay_acceptance="execution_eligible",
         ).validate()
+    with pytest.raises(ValueError, match="executed_plus_nvp_negative"):
+        _config(
+            gp_reference_mode=(
+                "sliding_executed_positive_per_gamma_frozen_phi"
+            ),
+        ).validate()
+    with pytest.raises(ValueError, match="gp_reference_rounds"):
+        _config(gp_reference_rounds=0).validate()
 
 
 def test_preterminal_reset_scenarios_are_paired_across_gamma(tmp_path):
@@ -282,3 +424,49 @@ def test_preterminal_reset_scenarios_are_paired_across_gamma(tmp_path):
     }
     assert by_gamma[0.1] == by_gamma[0.5]
     assert len(set(by_gamma[0.1])) == 2
+
+
+def test_executed_archive_pairs_scenarios_and_flow_bases_across_gamma(tmp_path):
+    class RecordingTask(_PreterminalTask):
+        def __init__(self):
+            self.resets = []
+
+        def reset(self, gamma, episode, seed):
+            self.resets.append((float(gamma), int(episode), int(seed)))
+            return _State()
+
+    class RandomPolicy(_Policy):
+        def sample_with_base(self, context, count, generator, base_std=1.0):
+            base = torch.randn(
+                count, 3, 1, generator=generator, dtype=context.dtype,
+            ) * float(base_std)
+            return base.clone(), base
+
+    task = RecordingTask()
+    events = []
+    run_safe_expansion(
+        RandomPolicy(), task, tmp_path / "paired_executed",
+        config=_config(
+            rounds=1, gammas=(0.1, 0.5), parallel_episodes=2,
+            max_steps=1, gp_buffer_cap=4, negative_alpha=0.0,
+            archive_rule="executed_plus_nvp_negative",
+            replay_acceptance="execution_eligible",
+            gp_reference_mode=(
+                "sliding_executed_positive_per_gamma_frozen_phi"
+            ),
+        ),
+        event_callback=events.append,
+    )
+    by_gamma = {
+        gamma: [seed for value, _, seed in task.resets if value == gamma]
+        for gamma in (0.1, 0.5)
+    }
+    assert by_gamma[0.1] == by_gamma[0.5]
+    by_cell = {
+        (event["gamma"], event["replica"]): event["flow_bases"]
+        for event in events
+    }
+    for replica in (0, 1):
+        assert torch.equal(
+            by_cell[(0.1, replica)], by_cell[(0.5, replica)]
+        )
