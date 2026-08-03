@@ -127,11 +127,31 @@ def _pooled(path: Path) -> dict:
     return json.loads(path.read_text())["summary"]["pooled"]
 
 
+def _successful_clearance(metrics: dict) -> float:
+    value = metrics.get("successful_clearance")
+    return float("-inf") if value is None else float(value)
+
+
+def _successful_time(metrics: dict) -> float:
+    value = metrics.get("successful_time_to_goal")
+    return float("inf") if value is None else float(value)
+
+
+def _clearance_gain(metrics: dict, baseline: dict) -> float:
+    clearance = _successful_clearance(metrics)
+    baseline_clearance = _successful_clearance(baseline)
+    if baseline_clearance == float("-inf"):
+        return 0.0 if clearance == float("-inf") else float("inf")
+    return clearance - baseline_clearance
+
+
 def development_key(metrics: dict, baseline: dict, *, round_index: int):
+    clearance = _successful_clearance(metrics)
+    baseline_clearance = _successful_clearance(baseline)
     safety_improvements = sum((
         metrics["CR"] < baseline["CR"],
         metrics["Validity"] > baseline["Validity"],
-        metrics["successful_clearance"] > baseline["successful_clearance"],
+        clearance > baseline_clearance,
     ))
     admissible = (
         metrics["SR"] >= baseline["SR"] - 0.10
@@ -141,8 +161,8 @@ def development_key(metrics: dict, baseline: dict, *, round_index: int):
         int(admissible), int(safety_improvements),
         baseline["CR"] - metrics["CR"],
         metrics["Validity"] - baseline["Validity"],
-        metrics["successful_clearance"] - baseline["successful_clearance"],
-        metrics["SR"], -metrics["successful_time_to_goal"], -int(round_index),
+        _clearance_gain(metrics, baseline),
+        metrics["SR"], -_successful_time(metrics), -int(round_index),
     )
 
 
@@ -150,7 +170,7 @@ def strict_win(metrics: dict, baseline: dict) -> bool:
     return bool(
         metrics["CR"] < baseline["CR"]
         and metrics["Validity"] > baseline["Validity"]
-        and metrics["successful_clearance"] > baseline["successful_clearance"]
+        and _successful_clearance(metrics) > _successful_clearance(baseline)
         and metrics["SR"] >= baseline["SR"] - 0.03
         and metrics["timeout"] <= baseline["timeout"] + 0.03
     )
@@ -207,6 +227,8 @@ def main(argv=None) -> int:
             "RBF_cap_total": 1344, "RBF_cap_per_gamma": 192,
             "GP_balance": "gamma -> lineage -> unique time stage",
             "archive": "all resolved selected-B queries through lineage terminal decision",
+            "scenario_batches_per_gamma_round": 1,
+            "success_retry": False,
             "positive": "exact full-H paper-SOCP y=1",
             "negative": "resolved exact y=0; never GP support",
             "paired_noised_representation": True,
@@ -252,7 +274,7 @@ def main(argv=None) -> int:
             "double_density_velocity_ood", "--scenario-start", str(args.scenario_start),
             "--rounds", str(args.rounds), "--parallel-episodes", "16",
             "--verifier-workers", str(args.verifier_workers),
-            "--max-retry-batches", "32", "--successful-trajectories-per-gamma", "1",
+            "--max-retry-batches", "1", "--successful-trajectories-per-gamma", "1",
             "--batch-size", "64", "--microbatch-repeats", "10",
             "--learning-rate", "1e-6", "--flow-base-std", "1.0",
             "--initial-beta", "0.0005", "--ess-target", "0.1",
@@ -390,6 +412,10 @@ def main(argv=None) -> int:
     delivery = {
         "status": "SFM_HP100_PRETERMINAL_SWEEP_COMPLETE",
         "pretrained_M50": confirm_baseline, "locked_kazuki_M50": kazuki_metrics,
+        "locked_kazuki_M50_artifact": {
+            "path": str(kazuki_out), "sha256": sha256_file(kazuki_out),
+            "execution": kazuki_result,
+        },
         "observed_best_M50": observed_best,
         "strict_pretrained_win": strict_win(observed_best["metrics"], confirm_baseline),
         "strict_win_definition": (

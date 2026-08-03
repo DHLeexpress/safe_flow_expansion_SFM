@@ -300,8 +300,9 @@ def build_contract(
                 "first-action latent stitching"
             ),
             gp=(
-                "previous-round exact-positive support only; equal gamma capacity, "
-                "then near-equal lineage and departure-to-tail time-stage coverage"
+                "strictly prior-round bounded sliding exact-positive support; equal "
+                "gamma capacity, then near-equal lineage and departure-to-tail "
+                "time-stage coverage"
             ),
             optimizer=(
                 "optimizer_steps_per_round caps distinct microbatches; microbatch_repeats "

@@ -232,6 +232,21 @@ def test_sliding_gp_does_not_turn_many_positive_queries_into_one_stage_bias():
     assert [row.window_start for row in selected] == [0, 1, 2, 4]
 
 
+def test_sliding_gp_retains_older_rows_but_never_current_round():
+    rows = [
+        _record(gamma=0.5, trajectory=0, start=0, round_i=0),
+        _record(gamma=0.5, trajectory=1, start=1, round_i=0),
+        _record(gamma=0.5, trajectory=2, start=2, round_i=1),
+        _record(gamma=0.5, trajectory=3, start=3, round_i=2),
+    ]
+    selected = _sliding_success_gp_rows(
+        rows, (0.5,), 4, through_round=1,
+        selector="trajectory_uniform",
+    )
+    assert {row.round for row in selected} == {0, 1}
+    assert all(row.round < 2 for row in selected)
+
+
 def test_preterminal_mode_cannot_silently_restore_success_only_filtering():
     _config().validate()
     with pytest.raises(ValueError, match="requires replay_acceptance=safety_valid"):

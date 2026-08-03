@@ -40,3 +40,22 @@ def test_strict_win_requires_all_declared_safety_improvements():
     )
     assert S.strict_win(winner, baseline)
     assert not S.strict_win(winner | {"successful_clearance": .10}, baseline)
+
+
+def test_zero_success_cell_is_ranked_fail_closed_without_type_error():
+    baseline = dict(
+        SR=.56, CR=.44, timeout=0.0, Validity=.48,
+        successful_clearance=.11, successful_time_to_goal=7.0,
+    )
+    zero_success = dict(
+        SR=0.0, CR=.20, timeout=.80, Validity=.90,
+        successful_clearance=None, successful_time_to_goal=None,
+    )
+    live = dict(
+        SR=.55, CR=.40, timeout=.05, Validity=.50,
+        successful_clearance=.12, successful_time_to_goal=8.0,
+    )
+    assert S.development_key(zero_success, baseline, round_index=1) < (
+        S.development_key(live, baseline, round_index=2)
+    )
+    assert not S.strict_win(zero_success, baseline)

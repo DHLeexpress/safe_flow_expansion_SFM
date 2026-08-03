@@ -1,7 +1,8 @@
 # HP100 SFM port of the 3-D ball expansion protocol
 
-Status: **preflight only**.  Do not launch a multi-round expansion until the
-2-D certificate and one parallel gathering batch have been visually approved.
+Status: **frozen overnight sweep ready**.  The fixed-radius 2-D certificate,
+candidate-specific geometry, and bounded parallel gathering smoke have passed
+their visual and numerical approval gates.
 
 ## Intended invariant
 
@@ -17,8 +18,8 @@ The port changes the task adapter, not the expansion mechanism:
 - an episode executes one full-H exact-positive plan and replans, or terminates
   as NVP when `B` contains no full-H exact-positive plan;
 - there is no controller, guidance, raw-plan, or expert fallback;
-- 16 episodes are advanced synchronously for each gamma, and failed batches
-  are retried until the declared minimum success count is reached;
+- exactly one batch of 16 episodes is advanced synchronously for each gamma and
+  round; NVP lineages terminate independently and are never success-retried;
 - every resolved selected-`B` full-`H=10` query is archived through each
   lineage's NVP, success, collision, or timeout decision: exact positives form
   `D+`, exact negatives form `D-`, and neither terminal status nor query
@@ -71,6 +72,11 @@ Because the HP100 encoder, GRU, low-state encoder, and trunk/phi are frozen,
 `sliding_positive_per_gamma_frozen_phi` is the explicit reference in this
 head-only arm. Candidate locations change as the output head changes; the
 feature map itself does not drift.
+The RBF support is a bounded sliding coreset over all strictly earlier rounds,
+not just the immediately preceding round. It retains older exact-positive rows
+when newer rows do not fill a gamma quota, while never reading the round being
+gathered. The `trajectory_uniform` selector first enforces equal gamma capacity
+and then near-equal lineage and departure-to-tail time-stage coverage.
 
 `parallel_episodes` is a synchronous lineage scheduler, not a guarantee that
 all policy forward calls are fused into one GPU tensor: the current reference

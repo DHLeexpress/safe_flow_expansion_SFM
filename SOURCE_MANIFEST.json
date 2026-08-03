@@ -24,8 +24,8 @@
     },
     {
       "path": "HP100_BALL_PROTOCOL_PORT.md",
-      "bytes": 11160,
-      "sha256": "dffe79a2b0ce6541ff0b754e0474b465e65eb9547b0af355179129513057622e"
+      "bytes": 11605,
+      "sha256": "473c2d349258a21a333205377f2e8a7a12c52d291d72aa1d6b24da03b04f0f83"
     },
     {
       "path": "LATEST_RESULT.md",
@@ -1199,13 +1199,13 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_preterminal_archive.py",
-      "bytes": 8806,
-      "sha256": "accfb80f2d73fb0b243a1410f0b7ddf0038765f335e0e721e45fee6dc26fadda"
+      "bytes": 9372,
+      "sha256": "1ab4407f09d5c6c28a93f2b3abdd524b32f3d69e51a1178fd17d79feeaa4f8a3"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_preterminal_sweep.py",
-      "bytes": 1476,
-      "sha256": "be8c6ded8116e9d27c34984f340dc754aed5dcd8aab974319a582a71e33b8b0f"
+      "bytes": 2161,
+      "sha256": "a2335b6774b91ae4a7c3e2837fe4490d81709ba57b57e64eaaff8f87593370b1"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp_history.py",
@@ -1409,8 +1409,8 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_ball_launch.py",
-      "bytes": 27720,
-      "sha256": "0c66b1e361dfe65ee91af88eed255307fd22104965385af8c26282aa216dd06c"
+      "bytes": 27756,
+      "sha256": "2950bbfe176f4f9bdbdcaa4bb02161ad7c0a8f3ea7a82678ef2202bbb4acc9b1"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_branch_viz.py",
@@ -1464,8 +1464,8 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_preterminal_sweep.py",
-      "bytes": 17853,
-      "sha256": "871843834026a02cad419cc01e6a7b5dc8da7b23d60777d100b5bbc9c00f142b"
+      "bytes": 18766,
+      "sha256": "201c2d7b6af62c05d149b8dedd8ded66e0ecf706a54b9501d0db2c065804e3c1"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp_history.py",
