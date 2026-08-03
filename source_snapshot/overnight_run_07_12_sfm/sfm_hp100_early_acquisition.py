@@ -701,6 +701,10 @@ def parser() -> argparse.ArgumentParser:
             "gamma 0.1/0.5/1.0; sufficient for offline branch rendering"
         ),
     )
+    value.add_argument(
+        "--trace-replica", type=int, default=0,
+        help="paired lineage replica retained in the optional compact trace",
+    )
     return value
 
 
@@ -719,11 +723,13 @@ def main(argv=None) -> int:
     ).attach_context_encoder(adapter.policy)
     started = time.time()
     trace_events: list[dict] = []
+    if not 0 <= int(args.trace_replica) < int(args.parallel_episodes):
+        raise ValueError("trace-replica must index one declared parallel lineage")
 
     def retain_trace(event: dict) -> None:
         if (
             int(event["seed"]) == seed_values[0]
-            and int(event["replica"]) == 0
+            and int(event["replica"]) == int(args.trace_replica)
             and any(
                 math.isclose(float(event["gamma"]), gamma, abs_tol=1.0e-7)
                 for gamma in (0.1, 0.5, 1.0)
@@ -774,7 +780,7 @@ def main(argv=None) -> int:
             "policy_state_sha256": payload["policy_state_sha256_after"],
             "config": payload["config"],
             "lineage_filter": {
-                "seed": seed_values[0], "replica": 0,
+                "seed": seed_values[0], "replica": int(args.trace_replica),
                 "gammas": [0.1, 0.5, 1.0],
             },
             "semantics": {

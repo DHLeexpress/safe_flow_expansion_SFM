@@ -82,8 +82,10 @@ def validate_trace(bundle: dict) -> None:
     declared = bundle.get("lineage_filter", {})
     if tuple(map(float, declared.get("gammas", ()))) != GAMMAS:
         raise ValueError("trace must contain gamma 0.1/0.5/1.0")
-    if int(declared.get("replica", -1)) != 0:
-        raise ValueError("trace must contain replica zero")
+    declared_replica = int(declared.get("replica", -1))
+    parallel = int(config.get("parallel_episodes_per_gamma", 0))
+    if not 0 <= declared_replica < parallel:
+        raise ValueError("trace declares an out-of-range paired replica")
 
     events = bundle.get("events", [])
     grouped = {gamma: [] for gamma in GAMMAS}
@@ -91,8 +93,8 @@ def validate_trace(bundle: dict) -> None:
         gamma = next((value for value in GAMMAS if _same(event["gamma"], value)), None)
         if gamma is None:
             raise ValueError("trace contains an undeclared gamma")
-        if int(event["replica"]) != 0:
-            raise ValueError("trace contains a nonzero replica")
+        if int(event["replica"]) != declared_replica:
+            raise ValueError("trace event differs from its declared paired replica")
         segments = np.asarray(event["queried_segments"])
         controls = np.asarray(event["queried_controls"])
         if segments.shape != (16, 11, 2) or controls.shape != (16, 10, 2):

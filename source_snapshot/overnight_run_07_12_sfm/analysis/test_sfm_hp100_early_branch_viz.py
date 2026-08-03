@@ -27,7 +27,7 @@ def _sidecar(segment):
     )
 
 
-def _event(gamma, step, *, chosen=3, negative=None):
+def _event(gamma, step, *, chosen=3, negative=None, replica=0):
     segments = np.zeros((16, 11, 2), np.float32)
     for index in range(16):
         segments[index, :, 0] = np.linspace(0, 1 + index / 20, 11)
@@ -45,7 +45,7 @@ def _event(gamma, step, *, chosen=3, negative=None):
     if chosen is not None:
         state_after[0] += .1
     event = dict(
-        seed=2, gamma=float(gamma), replica=0, scenario_id=300123,
+        seed=2, gamma=float(gamma), replica=int(replica), scenario_id=300123,
         step=int(step), K=64, B=16, state_before=state_before,
         state_after=state_after, ped_xy=np.array([[2., 2.]], np.float32),
         ped_vel=np.zeros((1, 2), np.float32),
@@ -111,3 +111,11 @@ def test_trace_rejects_noncanonical_candidate_budget():
     bundle["config"]["B"] = 4
     with pytest.raises(ValueError, match="canonical 16"):
         V.validate_trace(bundle)
+
+
+def test_trace_accepts_an_authenticated_nonzero_paired_replica():
+    bundle = _bundle()
+    bundle["lineage_filter"]["replica"] = 2
+    for event in bundle["events"]:
+        event["replica"] = 2
+    V.validate_trace(bundle)
