@@ -1178,6 +1178,11 @@
       "sha256": "ec03fdfed25372dc05a0d2e7048c96a158db63b0093403176679148a80c1f09f"
     },
     {
+      "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_early_acquisition.py",
+      "bytes": 5364,
+      "sha256": "e0fe4ba2cf3a5b260445cd3cf7c02a7aa9b4fb0565affe8ae4dbee22cb7d1cfc"
+    },
+    {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_eval.py",
       "bytes": 4892,
       "sha256": "f38e6b88324d0bd03d62feda7900c82f1eb4f2d2527d6c95b85964456cb2bf44"
@@ -1426,6 +1431,11 @@
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_dynamics.py",
       "bytes": 3731,
       "sha256": "2665ab2455b13d8a96b7cbb452dacdc1db0fc301ab00712fdb6d7cca6b4719e8"
+    },
+    {
+      "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_early_acquisition.py",
+      "bytes": 24322,
+      "sha256": "a3e33d7b60be9b41608fad74181d3196f8220c07eade472308717469a4303022"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_eval.py",
