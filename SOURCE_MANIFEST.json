@@ -453,6 +453,11 @@
       "sha256": "24c32198e8f5d95855d5891cc9320cf880d8b54dc11f019278ae50da2668793d"
     },
     {
+      "path": "scripts/sfm_hp100_early_eval_report.py",
+      "bytes": 13666,
+      "sha256": "9955913b79615dc014c0a998dae87b74b86443dd780ca4a25be858e66c7db98d"
+    },
+    {
       "path": "scripts/sfm_snapshot.py",
       "bytes": 931,
       "sha256": "6b9ceaaf93289baa9d498dfae28d5105251befa81356ab0cf63b776df77fffd9"
@@ -2231,6 +2236,11 @@
       "path": "tests/test_sfm_b1_viz_socp.py",
       "bytes": 2152,
       "sha256": "ca9edacd04ab9a7c26a09a6a7b435700dc284eca055c085ae2cdf2004b83224b"
+    },
+    {
+      "path": "tests/test_sfm_hp100_early_eval_report.py",
+      "bytes": 5520,
+      "sha256": "deb1bb212e2dbfe645ccc8a60144b12b4a8e98fd25958df0f2cb28375e711455"
     },
     {
       "path": "tests/test_sfm_hp_history.py",
