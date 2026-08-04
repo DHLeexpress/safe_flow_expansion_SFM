@@ -26,7 +26,7 @@ from sfm_hp100_ball_core import ExpansionConfig, assert_vendored_core, run_safe_
 import sfm_scene as SS
 
 
-VERSION = "sfm_hp100_early_executed_v1"
+VERSION = "sfm_hp100_early_executed_v2"
 K = 64
 B = 16
 T_GATHER = 30
@@ -34,15 +34,18 @@ PARALLEL_EPISODES = 16
 GP_CAP = 2_688
 GP_REFERENCE_ROUNDS = 2
 REPLAY_ROUNDS = 2
-FLOW_BASE_STD = 3.0
+FLOW_BASE_STD = 1.4
 EXECUTION_STEP_MARGIN_WEIGHT = 50_000.0
-LEARNING_RATE = 3.0e-7
+LEARNING_RATE = 1.0e-6
+MICROBATCH_REPEATS = 10
 NEGATIVE_ALPHA = 1.0e-3
 ESS_TARGET = 0.1
 INITIAL_BETA = 5.0e-4
 
 
-def _load_checkpoint(path: str, expected_sha256: str, device: str):
+def _load_checkpoint(
+    path: str, expected_sha256: str, device: str, optimizer_scope: str,
+):
     actual = BASE.sha256_file(path)
     if actual != str(expected_sha256).lower():
         raise RuntimeError(f"checkpoint SHA256 mismatch: {actual} != {expected_sha256}")
@@ -52,11 +55,24 @@ def _load_checkpoint(path: str, expected_sha256: str, device: str):
     if payload.get("pretrained_from_scratch") is not True:
         raise ValueError("early expansion requires the from-scratch HP100 checkpoint")
     adapter = PORT.HP100ExpansionPolicy(policy)
-    trainable = adapter.expansion_optimizer_parameters("last_block_and_head")
+    if optimizer_scope == "last_block_and_head":
+        trainable = adapter.expansion_optimizer_parameters(optimizer_scope)
+        expected_count = 137_236
+    elif optimizer_scope == "head_only":
+        for parameter in adapter.parameters():
+            parameter.requires_grad_(False)
+        trainable = list(adapter.head.parameters())
+        for parameter in trainable:
+            parameter.requires_grad_(True)
+        expected_count = 5_140
+    else:
+        raise ValueError(f"unsupported HP100 optimizer scope {optimizer_scope!r}")
     names = sorted(name for name, value in adapter.named_parameters() if value.requires_grad)
     count = sum(value.numel() for value in trainable)
-    if count != 137_236:
-        raise RuntimeError(f"last-block-plus-head parameter count drifted: {count}")
+    if count != expected_count:
+        raise RuntimeError(
+            f"{optimizer_scope} parameter count drifted: {count} != {expected_count}"
+        )
     return adapter, payload, actual, names, count
 
 
@@ -68,18 +84,19 @@ def protocol_config(args, *, lengthscale: float) -> ExpansionConfig:
         max_retry_batches=1, max_steps=T_GATHER,
         max_steps_status="EARLY_CUTOFF", K=K, B=B,
         batch_size=int(args.batch_size), inner_steps=None,
-        microbatch_repeats=1, learning_rate=float(args.learning_rate),
+        microbatch_repeats=int(args.microbatch_repeats),
+        learning_rate=float(args.learning_rate),
         freeze_visual_encoder=True, head_only_update=False,
-        optimizer_scope="last_block_and_head", replay_rounds=REPLAY_ROUNDS,
+        optimizer_scope=str(args.optimizer_scope), replay_rounds=REPLAY_ROUNDS,
         gp_buffer_cap=GP_CAP, gp_noise=1.0e-2,
         rbf_lengthscale=float(lengthscale), beta=INITIAL_BETA,
         adaptive_beta=True, ess_target=ESS_TARGET,
         negative_alpha=float(args.negative_alpha), replay_top_fraction=1.0,
-        replay_selector="uniform", flow_base_std=FLOW_BASE_STD,
+        replay_selector="uniform", flow_base_std=float(args.flow_base_std),
         candidate_perturb_std=0.0,
         candidate_perturb_scope="coherent_horizon",
         execution_rule="min_cost",
-        execution_step_margin_weight=EXECUTION_STEP_MARGIN_WEIGHT,
+        execution_step_margin_weight=float(args.execution_step_margin_weight),
         archive_rule="executed_plus_nvp_negative",
         successful_trajectory_selector="lowest_episode_id",
         successful_trajectories_per_gamma=0,
@@ -118,10 +135,11 @@ def build_contract(
         "checkpoint_sha256": checkpoint_sha,
         "architecture": payload["config"],
         "optimizer_scope": {
-            "name": "last_block_and_head",
+            "name": str(args.optimizer_scope),
             "trainable_parameter_names": trainable_names,
             "trainable_parameter_count": trainable_count,
             "learning_rate": float(args.learning_rate),
+            "microbatch_repeats": int(args.microbatch_repeats),
             "dropout_mode": "eval/off",
         },
         "scene_profile": SS.scene_profile(args.scene_profile),
@@ -144,14 +162,16 @@ def build_contract(
             ),
             "D_minus": (
                 "one resolved-invalid terminal counterfactual proposal per NVP, "
-                "ranked by the same J_native-50000*m_step rule; never executed"
+                f"ranked by J_native-{float(args.execution_step_margin_weight):g}"
+                "*m_step; never executed"
             ),
             "GP": (
                 "D+ only, frozen pretrained paired-noised phi, prior two rounds, "
                 "seven independent 384-row trajectory/time-uniform supports"
             ),
             "replay": (
-                "current plus previous round D+; one exposure per eligible row; "
+                "current plus previous round D+; each eligible row is exposed "
+                f"exactly {int(args.microbatch_repeats)} times; "
                 "D- contributes only through signed negative_alpha"
             ),
             "evaluation": (
@@ -197,6 +217,16 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--verifier-workers", type=int, default=32)
     value.add_argument("--batch-size", type=int, default=64)
     value.add_argument("--learning-rate", type=float, default=LEARNING_RATE)
+    value.add_argument("--microbatch-repeats", type=int, default=MICROBATCH_REPEATS)
+    value.add_argument("--flow-base-std", type=float, default=FLOW_BASE_STD)
+    value.add_argument(
+        "--execution-step-margin-weight", type=float,
+        default=EXECUTION_STEP_MARGIN_WEIGHT,
+    )
+    value.add_argument(
+        "--optimizer-scope", choices=("head_only", "last_block_and_head"),
+        default="last_block_and_head",
+    )
     value.add_argument("--negative-alpha", type=float, default=NEGATIVE_ALPHA)
     value.add_argument("--seed", type=int, default=2)
     return value
@@ -209,6 +239,7 @@ def main(argv=None) -> int:
         raise FileExistsError(f"refusing existing output root: {output}")
     adapter, payload, checkpoint_sha, names, count = _load_checkpoint(
         args.checkpoint, args.expected_checkpoint_sha256, args.device,
+        args.optimizer_scope,
     )
     task = PORT.SFMHP100ExpansionTask(
         scene_profile=args.scene_profile, scenario_start=args.scenario_start,
@@ -216,7 +247,7 @@ def main(argv=None) -> int:
     features, calibration = BASE.calibration_features(
         adapter, dataset_root=args.pretrain_dataset_root,
         expected_manifest_sha256=args.expected_pretrain_dataset_manifest_sha256,
-        count=50, seed=args.seed, base_std=FLOW_BASE_STD,
+        count=50, seed=args.seed, base_std=float(args.flow_base_std),
         paired_noised_representation=True,
     )
     contract, config = build_contract(
@@ -236,7 +267,8 @@ def main(argv=None) -> int:
     score_partial = output.with_suffix(output.suffix + ".execution_scores.jsonl.partial")
     acquisition_partial = output.with_suffix(output.suffix + ".acquisition.jsonl.partial")
     scores = BASE.ScoreLog(
-        score_partial, acquisition_partial, EXECUTION_STEP_MARGIN_WEIGHT,
+        score_partial, acquisition_partial,
+        float(args.execution_step_margin_weight),
     )
     try:
         manifest = run_safe_expansion(

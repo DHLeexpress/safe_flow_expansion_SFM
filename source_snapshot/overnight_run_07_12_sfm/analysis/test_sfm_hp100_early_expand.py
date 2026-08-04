@@ -10,7 +10,10 @@ import sfm_hp100_early_expand as EARLY
 def _args(**updates):
     values = dict(
         rounds=3, verifier_workers=32, batch_size=64,
-        learning_rate=3.0e-7, negative_alpha=1.0e-3, seed=2,
+        learning_rate=1.0e-6, microbatch_repeats=10,
+        flow_base_std=1.4, execution_step_margin_weight=50_000.0,
+        optimizer_scope="last_block_and_head",
+        negative_alpha=1.0e-3, seed=2,
     )
     values.update(updates)
     return Namespace(**values)
@@ -28,7 +31,7 @@ def test_early_protocol_is_the_declared_executed_window_arm():
     assert config.replay_acceptance == "execution_eligible"
     assert config.execution_rule == "min_cost"
     assert config.execution_step_margin_weight == 50_000.0
-    assert config.flow_base_std == 3.0
+    assert config.flow_base_std == 1.4
     assert config.gp_reference_mode == (
         "sliding_executed_positive_per_gamma_frozen_phi"
     )
@@ -38,10 +41,27 @@ def test_early_protocol_is_the_declared_executed_window_arm():
     assert config.gp_sliding_row_selector == "trajectory_uniform"
     assert config.optimizer_scope == "last_block_and_head"
     assert config.head_only_update is False
-    assert config.inner_steps is None and config.microbatch_repeats == 1
-    assert config.learning_rate == 3.0e-7
+    assert config.inner_steps is None and config.microbatch_repeats == 10
+    assert config.learning_rate == 1.0e-6
     assert config.negative_alpha == 1.0e-3
     assert config.adaptive_beta and config.ess_target == 0.1
+
+
+def test_head_only_arm_changes_only_scope_not_data_or_acquisition_recipe():
+    block = EARLY.protocol_config(_args(), lengthscale=0.5)
+    head = EARLY.protocol_config(
+        _args(optimizer_scope="head_only"), lengthscale=0.5,
+    )
+    assert head.optimizer_scope == "head_only"
+    assert head.head_only_update is False
+    assert head.learning_rate == block.learning_rate == 1.0e-6
+    assert head.microbatch_repeats == block.microbatch_repeats == 10
+    ignored = {"optimizer_scope"}
+    assert {
+        key: value for key, value in vars(head).items() if key not in ignored
+    } == {
+        key: value for key, value in vars(block).items() if key not in ignored
+    }
 
 
 def test_last_block_and_head_scope_is_exact_and_leaves_context_encoder_frozen():
@@ -62,6 +82,20 @@ def test_last_block_and_head_scope_is_exact_and_leaves_context_encoder_frozen():
     assert all(not value.requires_grad for value in policy.gru.parameters())
     assert all(not value.requires_grad for value in policy.enc_low.parameters())
     assert all(not value.requires_grad for value in policy.trunk.blocks[0].parameters())
+
+
+def test_head_only_scope_has_the_declared_parameter_count():
+    policy = GPS.GridSFMHP100FlowPolicy()
+    adapter = PORT.HP100ExpansionPolicy(policy)
+    for parameter in adapter.parameters():
+        parameter.requires_grad_(False)
+    parameters = list(adapter.head.parameters())
+    for parameter in parameters:
+        parameter.requires_grad_(True)
+    assert sum(parameter.numel() for parameter in parameters) == 5_140
+    assert {
+        name for name, value in adapter.named_parameters() if value.requires_grad
+    } == {"policy.head.weight", "policy.head.bias"}
 
 
 def test_last_block_and_head_can_move_without_changing_frozen_modules():

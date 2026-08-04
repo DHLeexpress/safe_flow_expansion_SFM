@@ -28,7 +28,8 @@ from sfm_hp100_ball_core.expansion import RBFPosterior, _OrderedVerifier, _count
 import sfm_scene as SS
 
 
-VERSION = "sfm_hp100_early_acquisition_v1"
+VERSION = "sfm_hp100_early_acquisition_v2"
+TRACE_VERSION = "sfm_hp100_early_branch_trace_v2"
 STATUS = "SFM_HP100_EARLY_ACQUISITION_COMPLETE"
 ROUND = 1
 RETRY_BATCH = 0
@@ -156,6 +157,21 @@ def _select(
     )
 
 
+def _progress_rank(results: Sequence, chosen: int | None) -> int | None:
+    """One-based H10-progress rank among execution-eligible B queries."""
+    if chosen is None:
+        return None
+    eligible = [
+        index for index, result in enumerate(results)
+        if not result.error and result.valid and result.progress_eligible
+    ]
+    ranked = sorted(
+        eligible,
+        key=lambda index: (-float(results[index].progress), index),
+    )
+    return ranked.index(int(chosen)) + 1
+
+
 @torch.inference_mode()
 def _sample_blocks(
     adapter: PORT.HP100ExpansionPolicy,
@@ -215,7 +231,11 @@ def _summary(
     lineages: Sequence[dict], query_rows: Sequence[dict], context_rows: Sequence[dict],
     max_steps: int,
 ) -> dict:
-    def one(rows: Sequence[dict], queries: Sequence[dict], contexts_for_group: Sequence[dict]) -> dict:
+    def one(
+        rows: Sequence[dict], queries: Sequence[dict],
+        contexts_for_group: Sequence[dict],
+    ) -> dict:
+        selection_horizon = min(30, int(max_steps))
         nvp_times = [row["nvp_step"] for row in rows if row["status"] == "nvp"]
         # Success/cutoff are favorable right-censoring. Collision/OOB terminate
         # gathering at their actual executed lifetime and must not rank as survival.
@@ -228,6 +248,11 @@ def _summary(
             row["nvp_step"] if row["status"] == "nvp" else max_steps
             for row in rows
         ]
+        rmst_30_clock = [
+            selection_horizon if row["status"] in {"success", "cutoff"}
+            else min(selection_horizon, int(row["executed_steps"]))
+            for row in rows
+        ]
         positive = sum(row["y"] == 1 for row in queries)
         negative = sum(row["y"] == 0 and not row["error"] for row in queries)
         errors = sum(bool(row["error"]) for row in queries)
@@ -238,13 +263,56 @@ def _summary(
         }
         eligible_queries = [row for row in queries if row["execution_eligible"]]
         chosen_queries = [row for row in queries if row["chosen"]]
+        prefix_contexts = [
+            row for row in contexts_for_group
+            if int(row["step"]) < selection_horizon
+        ]
         one_step_progress = [
             row["chosen_one_step_goal_progress"] for row in contexts_for_group
             if row["chosen_one_step_goal_progress"] is not None
         ]
+        net_progress = [
+            row["net_goal_progress_to_stop_or_cutoff"] for row in rows
+        ]
+        progress_ranks = [
+            row["chosen_H10_progress_rank"] for row in contexts_for_group
+            if row["chosen_H10_progress_rank"] is not None
+        ]
+        performance_reference = [
+            row["performance_reference_H10_goal_progress"]
+            for row in contexts_for_group
+            if row["performance_reference_H10_goal_progress"] is not None
+        ]
+        chosen_minus_reference = [
+            row["chosen_minus_performance_reference_H10_progress"]
+            for row in contexts_for_group
+            if row["chosen_minus_performance_reference_H10_progress"] is not None
+        ]
+        lineage_keys = [
+            (int(row["seed"]), float(row["gamma"]), int(row["replica"]))
+            for row in rows
+        ]
 
         def mean_or_none(values: Sequence[float]) -> float | None:
             return float(np.mean(values)) if values else None
+
+        def lineage_macro_mean(field: str, *, sum_values: bool = False) -> float | None:
+            grouped: dict[tuple[int, float, int], list[float]] = defaultdict(list)
+            for row in prefix_contexts:
+                value = row.get(field)
+                if value is not None:
+                    grouped[(
+                        int(row["seed"]), float(row["gamma"]), int(row["replica"]),
+                    )].append(float(value))
+            values = []
+            for key in lineage_keys:
+                samples = grouped.get(key, [])
+                if sum_values:
+                    values.append(float(np.sum(samples)) if samples else 0.0)
+                elif samples:
+                    values.append(float(np.mean(samples)))
+            return float(np.mean(values)) if values else None
+
         survived_30 = sum(
             row["status"] == "success" or row["executed_steps"] >= 30
             for row in rows
@@ -256,6 +324,15 @@ def _summary(
             "survived_30_count": int(survived_30),
             "early_gather_RMST_to_max_steps": (
                 float(np.mean(gather_clock)) if rows else None
+            ),
+            "early_gather_RMST_at_30": (
+                float(np.mean(rmst_30_clock)) if rows else None
+            ),
+            "lineage_macro_net_goal_progress_at_30": lineage_macro_mean(
+                "chosen_one_step_goal_progress", sum_values=True,
+            ),
+            "lineage_net_goal_progress_to_stop_or_cutoff_mean": (
+                float(np.mean(net_progress)) if net_progress else None
             ),
             "executed_steps": {
                 "mean": float(np.mean([row["executed_steps"] for row in rows])),
@@ -289,6 +366,33 @@ def _summary(
                     row["H10_goal_progress"] for row in chosen_queries
                 ]),
                 "chosen_one_step_mean": mean_or_none(one_step_progress),
+                "chosen_H10_progress_rank_mean": mean_or_none(progress_ranks),
+                "lineage_macro_chosen_H10_mean_at_30": lineage_macro_mean(
+                    "chosen_H10_goal_progress"
+                ),
+                "lineage_macro_chosen_one_step_mean_at_30": lineage_macro_mean(
+                    "chosen_one_step_goal_progress"
+                ),
+                "chosen_H10_progress_percentile_mean_at_30": mean_or_none([
+                    row["chosen_H10_progress_percentile"] for row in prefix_contexts
+                    if row.get("chosen_H10_progress_percentile") is not None
+                ]),
+                "chosen_H10_progress_percentile_ge_0p75_fraction_at_30": (
+                    float(np.mean([
+                        row["chosen_H10_progress_percentile"] >= .75
+                        for row in prefix_contexts
+                        if row.get("chosen_H10_progress_percentile") is not None
+                    ])) if any(
+                        row.get("chosen_H10_progress_percentile") is not None
+                        for row in prefix_contexts
+                    ) else None
+                ),
+                "performance_reference_H10_mean": mean_or_none(
+                    performance_reference
+                ),
+                "chosen_minus_performance_reference_H10_mean": mean_or_none(
+                    chosen_minus_reference
+                ),
                 "chosen_native_cost_mean": mean_or_none([
                     row["native_cost"] for row in chosen_queries
                 ]),
@@ -307,7 +411,15 @@ def _summary(
             row for row in context_rows if float(row["gamma"]) == gamma
         ]
         by_gamma[f"{gamma:g}"] = one(rows, queries, contexts_for_gamma)
-    return {"pooled": pooled, "per_gamma": by_gamma}
+    by_seed = {}
+    for seed in sorted({int(row["seed"]) for row in lineages}):
+        rows = [row for row in lineages if int(row["seed"]) == seed]
+        queries = [row for row in query_rows if int(row["seed"]) == seed]
+        contexts_for_seed = [
+            row for row in context_rows if int(row["seed"]) == seed
+        ]
+        by_seed[str(seed)] = one(rows, queries, contexts_for_seed)
+    return {"pooled": pooled, "per_gamma": by_gamma, "per_seed": by_seed}
 
 
 @torch.inference_mode()
@@ -357,10 +469,14 @@ def run_diagnostic(
             for replica in range(parallel_episodes):
                 reset_seed = _counter_seed(seed, "reset", ROUND, RETRY_BATCH, replica)
                 state = task.reset(gamma, replica, reset_seed)
+                initial_goal_distance = float(
+                    np.linalg.norm(np.asarray(state.robot, np.float32)[:2] - SS.GOAL)
+                )
                 episodes.append({
                     "seed": seed, "gamma": gamma, "replica": replica,
                     "scenario_id": int(state.scenario_id), "state": state,
                     "status": None, "nvp_step": None, "executed_steps": 0,
+                    "initial_goal_distance": initial_goal_distance,
                 })
 
     query_rows: list[dict] = []
@@ -434,9 +550,13 @@ def run_diagnostic(
                     results, rule=execution_rule,
                     step_margin_weight=step_margin_weight,
                 )
+                performance_reference, _ = _select(
+                    results, rule="weighted_cost", step_margin_weight=0.0,
+                )
                 prepared_row["results"] = results
                 prepared_row["chosen"] = chosen
                 prepared_row["scores"] = scores
+                prepared_row["performance_reference"] = performance_reference
                 if chosen is None and audit_unselected_at_nvp and B < K:
                     selected_set = set(prepared_row["selected"])
                     remaining = [candidate for candidate in range(K) if candidate not in selected_set]
@@ -466,6 +586,7 @@ def run_diagnostic(
                 results = prepared_row["results"]
                 selected = prepared_row["selected"]
                 chosen = prepared_row["chosen"]
+                performance_reference = prepared_row["performance_reference"]
                 identity = {
                     "seed": episode["seed"], "gamma": episode["gamma"],
                     "replica": episode["replica"], "scenario_id": episode["scenario_id"],
@@ -483,6 +604,9 @@ def run_diagnostic(
                             result.valid and result.progress_eligible
                         ),
                         "chosen": bool(local == chosen),
+                        "performance_reference": bool(
+                            local == performance_reference
+                        ),
                         "native_cost": float(result.execution_cost),
                         "step_margin": float(result.step_margin),
                         "H10_goal_progress": float(result.progress),
@@ -502,10 +626,20 @@ def run_diagnostic(
                     None if chosen is None else float(results[chosen].progress)
                 )
                 chosen_one_step_progress = None
+                performance_reference_one_step_progress = None
                 robot_before, ped_xy, ped_vel = task.decode_context(
                     prepared_row["context"]
                 )
                 robot_after = np.asarray(robot_before, np.float32).copy()
+                if performance_reference is not None:
+                    reference_after = PORT.clipped_plan_states(
+                        robot_before,
+                        queried_cpu[int(performance_reference)].numpy(),
+                    )[1]
+                    performance_reference_one_step_progress = float(
+                        np.linalg.norm(np.asarray(robot_before[:2]) - SS.GOAL)
+                        - np.linalg.norm(reference_after[:2] - SS.GOAL)
+                    )
                 archived_negative_local = None
                 if chosen is None:
                     if index in audit_results:
@@ -559,6 +693,10 @@ def run_diagnostic(
                     "chosen_candidate_id": (
                         None if chosen is None else int(selected[chosen])
                     ),
+                    "performance_reference_candidate_id": (
+                        None if performance_reference is None
+                        else int(selected[performance_reference])
+                    ),
                     "eligible_B_H10_progress_mean": (
                         float(np.mean(eligible_progress)) if eligible_progress else None
                     ),
@@ -567,6 +705,30 @@ def run_diagnostic(
                     ),
                     "chosen_H10_goal_progress": chosen_H10_progress,
                     "chosen_one_step_goal_progress": chosen_one_step_progress,
+                    "chosen_H10_progress_rank": _progress_rank(results, chosen),
+                    "chosen_H10_progress_percentile": (
+                        None if chosen is None else (
+                            1.0 if len(eligible_progress) == 1 else
+                            1.0 - (
+                                float(_progress_rank(results, chosen) - 1)
+                                / float(len(eligible_progress) - 1)
+                            )
+                        )
+                    ),
+                    "performance_reference_H10_goal_progress": (
+                        None if performance_reference is None
+                        else float(results[performance_reference].progress)
+                    ),
+                    "performance_reference_one_step_goal_progress": (
+                        performance_reference_one_step_progress
+                    ),
+                    "chosen_minus_performance_reference_H10_progress": (
+                        None if chosen is None or performance_reference is None
+                        else float(
+                            results[chosen].progress
+                            - results[performance_reference].progress
+                        )
+                    ),
                     "marginal_sigma_mean": float(prepared_row["sigma"].mean()),
                     "marginal_ESS_over_K": 1.0,
                     "conditional_ESS_over_remaining": list(map(float, prepared_row["conditional_ess"])),
@@ -604,6 +766,10 @@ def run_diagnostic(
                             for result in results
                         ],
                         "chosen_local": None if chosen is None else int(chosen),
+                        "performance_reference_local": (
+                            None if performance_reference is None
+                            else int(performance_reference)
+                        ),
                         "archived_negative_local": archived_negative_local,
                         "status": trace_status,
                         "nvp_cause": nvp_cause,
@@ -623,6 +789,10 @@ def run_diagnostic(
             "seed": row["seed"], "gamma": row["gamma"], "replica": row["replica"],
             "scenario_id": row["scenario_id"], "status": row["status"],
             "nvp_step": row["nvp_step"], "executed_steps": row["executed_steps"],
+            "net_goal_progress_to_stop_or_cutoff": float(
+                row["initial_goal_distance"]
+                - np.linalg.norm(np.asarray(row["state"].robot, np.float32)[:2] - SS.GOAL)
+            ),
         }
         for row in episodes
     ]
@@ -634,6 +804,9 @@ def run_diagnostic(
         "scientific_role": "acquisition-only; no replay, optimizer, or checkpoint write",
         "config": {
             "round": ROUND, "max_steps": max_steps, "K": K, "B": B, "H": H,
+            "scene_profile": str(task.scene_profile),
+            "scene_profile_contract": dict(task.profile),
+            "scenario_start": int(task.scenario_start),
             "flow_base_std": flow_base_std, "beta": beta,
             "rbf": {"buffer_rows": 0, "lengthscale": rbf_lengthscale, "noise": rbf_noise},
             "round1_note": (
@@ -667,6 +840,7 @@ def run_diagnostic(
         },
         "timers_seconds": dict(sorted(timers.items())),
         "lineages": lineages,
+        "scene_ledger": list(task.scene_ledger),
     }
     return payload, query_rows, context_rows
 
@@ -750,8 +924,20 @@ def main(argv=None) -> int:
         event_callback=(retain_trace if args.trace_output else None),
     )
     payload["wall_seconds"] = time.time() - started
+    dataset = checkpoint_payload.get("dataset", {})
+    dataset_manifest_sha = dataset.get("manifest_sha256")
+    provenance_manifest_sha = checkpoint_payload.get("provenance", {}).get(
+        "dataset_manifest_sha256"
+    )
+    if (
+        not isinstance(dataset_manifest_sha, str)
+        or len(dataset_manifest_sha) != 64
+        or dataset_manifest_sha != provenance_manifest_sha
+    ):
+        raise RuntimeError("checkpoint pretraining-dataset provenance is incomplete")
     payload["checkpoint"] = {
         "path": str(Path(args.checkpoint).resolve()), "sha256": checkpoint_sha,
+        "pretrain_dataset_manifest_sha256": dataset_manifest_sha,
         "scientific_status": checkpoint_payload.get("scientific_status"),
         "trainable_parameter_names": trainable,
     }
@@ -775,7 +961,7 @@ def main(argv=None) -> int:
             )
         trace_bundle = {
             "status": "SFM_HP100_EARLY_BRANCH_TRACE_COMPLETE",
-            "version": "sfm_hp100_early_branch_trace_v1",
+            "version": TRACE_VERSION,
             "checkpoint_sha256": checkpoint_sha,
             "policy_state_sha256": payload["policy_state_sha256_after"],
             "config": payload["config"],
@@ -785,6 +971,10 @@ def main(argv=None) -> int:
             },
             "semantics": {
                 "green": "all and only the selected B exact-verifier queries",
+                "purple_dashed": (
+                    "lambda-zero native-cost reference among the same exact-positive B; "
+                    "never an additional execution"
+                ),
                 "blue": (
                     "exact-positive selected proposal whose clipped first action "
                     "was executed; exact candidate-specific GREEN verifier faces "

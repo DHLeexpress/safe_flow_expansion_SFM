@@ -30,16 +30,17 @@ import sfm_hp100_branch_viz as RAW_BRANCH
 import sfm_scene as SS
 
 
-VERSION = "sfm_hp100_early_branch_viz_v1"
+VERSION = "sfm_hp100_early_branch_viz_v2"
 STATUS = "SFM_HP100_EARLY_BRANCH_VIZ_COMPLETE"
 TRACE_STATUS = "SFM_HP100_EARLY_BRANCH_TRACE_COMPLETE"
-TRACE_VERSION = "sfm_hp100_early_branch_trace_v1"
+TRACE_VERSION = "sfm_hp100_early_branch_trace_v2"
 GAMMAS = (0.1, 0.5, 1.0)
 GREEN = "#00A651"
 BLUE = "#0000FF"
 RED = "#FF0000"
 BLACK = "#111111"
 GRAY = "#777777"
+REFERENCE = "#7A5195"
 
 
 def sha256_file(path: str | os.PathLike) -> str:
@@ -65,11 +66,8 @@ def validate_trace(bundle: dict) -> None:
         raise ValueError("not a completed HP100 early-branch trace")
     config = bundle.get("config", {})
     expected = {
-        "max_steps": 30, "K": 64, "B": 16,
-        "flow_base_std": 3.0,
-        "execution_rule": "weighted_cost",
-        "execution_step_margin_weight": 50_000.0,
-        "parallel_episodes_per_gamma": 16,
+        "K": 64, "B": 16,
+        "execution_rule": "weighted_cost", "parallel_episodes_per_gamma": 16,
     }
     for key, value in expected.items():
         actual = config.get(key)
@@ -79,6 +77,16 @@ def validate_trace(bundle: dict) -> None:
             matches = actual == value
         if not matches:
             raise ValueError(f"trace {key}={actual!r}, expected canonical {value!r}")
+    max_steps = int(config.get("max_steps", 0))
+    if max_steps < 30:
+        raise ValueError("trace max_steps must retain at least the first 30 steps")
+    if not math.isfinite(float(config.get("flow_base_std", float("nan")))) \
+            or float(config["flow_base_std"]) <= 0.0:
+        raise ValueError("trace flow_base_std must be finite and positive")
+    if not math.isfinite(float(config.get(
+        "execution_step_margin_weight", float("nan")
+    ))) or float(config["execution_step_margin_weight"]) < 0.0:
+        raise ValueError("trace step-margin weight must be finite and nonnegative")
     declared = bundle.get("lineage_filter", {})
     if tuple(map(float, declared.get("gammas", ()))) != GAMMAS:
         raise ValueError("trace must contain gamma 0.1/0.5/1.0")
@@ -102,7 +110,12 @@ def validate_trace(bundle: dict) -> None:
         if len(event["verification"]) != 16:
             raise ValueError("trace verifier rows differ from B=16")
         chosen = event.get("chosen_local")
+        reference = event.get("performance_reference_local")
         negative = event.get("archived_negative_local")
+        if reference is not None:
+            reference_row = event["verification"][int(reference)]
+            if reference_row["error"] or not reference_row["valid"]:
+                raise ValueError("performance reference is not an exact-positive query")
         if chosen is not None:
             sidecar = event.get("chosen_verifier_sidecar")
             if negative is not None or not event["verification"][int(chosen)]["valid"]:
@@ -221,7 +234,14 @@ def draw_lineage(axis, rows: list[dict], frame: int) -> dict:
             marker=".", ms=1.8, alpha=.32, zorder=4,
         )
     chosen = current.get("chosen_local")
+    reference = current.get("performance_reference_local")
     archived_negative = current.get("archived_negative_local")
+    if reference is not None:
+        segment = np.asarray(current["queried_segments"][int(reference)], float)
+        axis.plot(
+            segment[:, 0], segment[:, 1], color=REFERENCE, lw=2.2,
+            ls="--", marker=".", ms=2.0, alpha=.88, zorder=7,
+        )
     if chosen is not None:
         segment = np.asarray(current["queried_segments"][int(chosen)], float)
         axis.plot(
@@ -250,6 +270,35 @@ def draw_lineage(axis, rows: list[dict], frame: int) -> dict:
         path[:, 0], path[:, 1], color=BLACK, lw=1.05,
         marker=".", ms=1.8, alpha=.98, zorder=11,
     )
+    if chosen is not None:
+        chosen_row = current["verification"][int(chosen)]
+        reference_row = (
+            None if reference is None
+            else current["verification"][int(reference)]
+        )
+        one_step = float(
+            np.linalg.norm(np.asarray(current["state_before"], float)[:2] - SS.GOAL)
+            - np.linalg.norm(np.asarray(current["state_after"], float)[:2] - SS.GOAL)
+        )
+        net = float(
+            np.linalg.norm(np.asarray(rows[0]["state_before"], float)[:2] - SS.GOAL)
+            - np.linalg.norm(np.asarray(current["state_after"], float)[:2] - SS.GOAL)
+        )
+        delta = (
+            None if reference_row is None
+            else float(chosen_row["progress"] - reference_row["progress"])
+        )
+        annotation = (
+            f"H10={float(chosen_row['progress']):+.2f} m"
+            + ("" if delta is None else f"  Δvs λ0={delta:+.2f} m")
+            + f"\n1-step={one_step:+.3f} m  net={net:+.2f} m"
+        )
+        axis.text(
+            .02, .02, annotation, transform=axis.transAxes,
+            ha="left", va="bottom", fontsize=7.2,
+            bbox=dict(facecolor="white", edgecolor="none", alpha=.72, pad=2.0),
+            zorder=20,
+        )
     axis.set_title("")
     return current
 
@@ -275,6 +324,8 @@ def render_trace(
     figure.legend(
         handles=[
             Line2D([], [], color=GREEN, lw=2.0, label="queried B=16 branches"),
+            Line2D([], [], color=REFERENCE, lw=2.2, ls="--",
+                   label="λ=0 performance-reference branch"),
             Line2D([], [], color=RAW_BRANCH.GREEN, lw=1.2,
                    label="chosen branch: exact GREEN outer set + h=1..10"),
             Line2D([], [], color=BLUE, lw=3.4,
@@ -290,8 +341,12 @@ def render_trace(
         .805, .36,
         "Red is never executed.\n"
         "It is archived only after NVP, when all B queries are negative.\n\n"
-        "K=64 · B=16 · σbase=3 · T_gather=30\n"
-        "selector: J_SafeMPPI − 50k · m_step",
+        "K=64 · B=16 · "
+        f"σbase={float(bundle['config']['flow_base_std']):g} · "
+        f"T_diagnostic={int(bundle['config']['max_steps'])} "
+        "(selection prefix=30)\n"
+        "selector: J_SafeMPPI − "
+        f"{float(bundle['config']['execution_step_margin_weight']):g} · m_step",
         ha="left", va="top", fontsize=8,
     )
 

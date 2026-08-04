@@ -51,11 +51,24 @@ class _Task:
     def __init__(self, positive_steps=2):
         self.positive_steps = int(positive_steps)
         self.reset_rows = []
+        self.scene_profile = "double_density_velocity_ood"
+        self.profile = {
+            "name": self.scene_profile, "n_ped": 40,
+            "ped_speed_range": [1.0, 2.0],
+        }
+        self.scenario_start = 300_000
+        self.scene_ledger = []
 
     def reset(self, gamma, episode, seed):
         self.reset_rows.append((float(gamma), int(episode), int(seed)))
+        scenario_id = 300_000 + int(seed) % 1_000_000_000
+        self.scene_ledger.append({
+            "core_episode": int(episode), "scenario_id": scenario_id,
+            "gamma": float(gamma), "reset_seed": int(seed),
+            "fixed_scenario_audit": False,
+        })
         return _State(
-            scenario_id=300_000 + int(seed) % 1_000_000_000,
+            scenario_id=scenario_id,
             robot=np.zeros(4, np.float32),
         )
 
@@ -111,6 +124,14 @@ def test_no_update_and_paired_16_by_7_lineages_with_nvp_accounting():
     assert len(contexts) == 16 * 7 * 3
     assert payload["summary"]["pooled"]["selected_B"]["Dplus"] == 16 * 7 * 2
     assert payload["summary"]["pooled"]["selected_B"]["Dminus"] == 16 * 7
+    assert payload["summary"]["pooled"]["early_gather_RMST_at_30"] == 2.0
+    assert payload["summary"]["pooled"][
+        "lineage_macro_net_goal_progress_at_30"
+    ] > 0.0
+    assert payload["summary"]["pooled"]["goal_progress"][
+        "chosen_H10_progress_percentile_mean_at_30"
+    ] == 1.0
+    assert set(payload["summary"]["per_seed"]) == {"2"}
     for replica in range(16):
         ids = {
             row["scenario_id"] for row in payload["lineages"]
@@ -159,6 +180,29 @@ def test_terminal_negative_uses_the_same_weighted_score_as_production():
     )
     # Native costs are [0,1], margins are [0,.1], and lambda=700k.
     assert terminal["archived_negative_local"] == 1
+
+
+def test_progress_rank_and_lambda_zero_reference_are_explicit():
+    _, queries, contexts = _run(_Task(positive_steps=1), K=2, B=2)
+    first = next(
+        row for row in contexts
+        if row["gamma"] == .1 and row["replica"] == 0 and row["step"] == 0
+    )
+    # Max-margin chooses slot 1, while the lambda-zero native-cost reference is slot 0.
+    assert first["chosen_H10_progress_rank"] == 2
+    assert first["chosen_H10_progress_percentile"] == 0.0
+    chosen = next(
+        row for row in queries
+        if row["gamma"] == .1 and row["replica"] == 0
+        and row["step"] == 0 and row["chosen"]
+    )
+    reference = next(
+        row for row in queries
+        if row["gamma"] == .1 and row["replica"] == 0
+        and row["step"] == 0 and row["performance_reference"]
+    )
+    assert chosen["selected_slot"] == 1
+    assert reference["selected_slot"] == 0
 
 
 def test_trace_marks_step_30_as_early_cutoff_not_active():

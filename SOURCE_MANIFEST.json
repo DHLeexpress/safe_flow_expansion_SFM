@@ -1184,18 +1184,28 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_early_acquisition.py",
-      "bytes": 9014,
-      "sha256": "ba3c9db4ca170391152fb4033157ed4d9bb769c7144ee470dececad7662b932f"
+      "bytes": 10756,
+      "sha256": "a5e0d3dcb33391067ece155e18034ad0f498a9c4eb7b31469b3beebf2cf9dbbf"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_early_branch_viz.py",
-      "bytes": 4359,
-      "sha256": "6ffc949708aa6d8856d195b2551d7f4ec7f83e1d2afc5af82bdfb87ad59a92dc"
+      "bytes": 4814,
+      "sha256": "ccf7f5463da966121d7d547604b1c04e7673d8c34f83fd475b02dacd088ed12b"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_early_expand.py",
-      "bytes": 3536,
-      "sha256": "f56411d0fff75b5ce889676142f8f5443cf5d716b1c37130f13d028b7418ed27"
+      "bytes": 4937,
+      "sha256": "efe2e59df1a676b443b07cb74f138d06049f494570b7848a84465b91cc7e2a6b"
+    },
+    {
+      "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_early_lambda_report.py",
+      "bytes": 5469,
+      "sha256": "58c6bb5f5f003c623475c5486f1025df6e5f77774710751213cba7d003b87828"
+    },
+    {
+      "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_early_two_arm.py",
+      "bytes": 3803,
+      "sha256": "da3b4cff50ac09800bac9dbd105c45a1d31d1f0b4c449a3bb3b41b701b1ec546"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_eval.py",
@@ -1449,18 +1459,28 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_early_acquisition.py",
-      "bytes": 36893,
-      "sha256": "029a67af0f144f32f32708f933f451e5ae1585dd99793fb5eb4592afc400386b"
+      "bytes": 45852,
+      "sha256": "d535b0b11799517355217e4227d9ebf398a91db06db59a030c604fdce3021175"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_early_branch_viz.py",
-      "bytes": 15417,
-      "sha256": "afdcf72374b54caa8bb18f94afc9aa64d4848e00aad0a115c618d12063a0e930"
+      "bytes": 18152,
+      "sha256": "dbd9c7ac23c03a5f375502deb30d2c6bc9af8ecaf7223dbd59a712b73b088e4c"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_early_expand.py",
-      "bytes": 12286,
-      "sha256": "08b2eba59a7135c471a903dac18ce1c99ed0709aab83be6a93c0e04ba87c7d18"
+      "bytes": 13590,
+      "sha256": "32d90f222a53d79c02428d3387e3e07786e7ed3efbe414ad8f4b3829d83960e8"
+    },
+    {
+      "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_early_lambda_report.py",
+      "bytes": 11434,
+      "sha256": "5f6a816762ba8aeb10e872aa5477729f06f21d415cb3abe4643074aaf4563e57"
+    },
+    {
+      "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_early_two_arm.py",
+      "bytes": 13574,
+      "sha256": "9854cccb350c0a6ec6a8f2a220bae1b29dbf067ad173213fcbb98c13d9f279e4"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_eval.py",

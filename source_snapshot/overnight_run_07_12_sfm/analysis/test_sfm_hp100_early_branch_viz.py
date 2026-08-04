@@ -119,3 +119,17 @@ def test_trace_accepts_an_authenticated_nonzero_paired_replica():
     for event in bundle["events"]:
         event["replica"] = 2
     V.validate_trace(bundle)
+
+
+def test_lambda_zero_reference_is_drawn_without_becoming_execution():
+    bundle = _bundle()
+    event = bundle["events"][0]
+    event["performance_reference_local"] = 0
+    event["verification"][0]["valid"] = True
+    V.validate_trace(bundle)
+    figure, axis = plt.subplots()
+    V.draw_lineage(axis, [event], 0)
+    colors = [line.get_color() for line in axis.lines]
+    assert V.REFERENCE in colors
+    assert V.BLUE in colors
+    plt.close(figure)
