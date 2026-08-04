@@ -33,7 +33,7 @@ COMPLETE_STATUS = "SFM_HP100_ITERATIVE_DOSE_SWEEP_COMPLETE"
 NO_WINNER_STATUS = "SFM_HP100_ITERATIVE_DOSE_SWEEP_NO_ELIGIBLE_CELL"
 EXPECTED_EVIDENCE_SOURCE_COMMIT = "15231d30ff4af8427509464dd827490a221b3c78"
 SCOPES = ("head_only", "last_block_and_head")
-DOSE_FAMILIES = ("original", "p1_dominant")
+DOSE_FAMILIES = ("original", "p1_dominant", "balanced_depth")
 
 
 @dataclass(frozen=True)
@@ -68,6 +68,13 @@ def declared_doses(family: str = "original") -> tuple[Dose, ...]:
             ("retain1", 3.0e-5, 1, 1.0e-5, 1, 3.0e-5, 4),
             ("anchor4", 3.0e-5, 4, 1.0e-6, 1, 3.0e-5, 4),
             ("p1strong", 1.0e-4, 1, 1.0e-6, 1, 3.0e-5, 4),
+        )
+    elif family == "balanced_depth":
+        rows = (
+            ("balanced2", 1.0e-5, 2, 1.0e-5, 2, 3.0e-5, 2),
+            ("balanced4", 1.0e-5, 4, 1.0e-5, 4, 3.0e-5, 4),
+            ("balanced8", 1.0e-5, 8, 1.0e-5, 8, 3.0e-5, 4),
+            ("balanced16", 1.0e-5, 16, 1.0e-5, 16, 3.0e-5, 4),
         )
     else:
         raise ValueError(f"dose family must be one of {DOSE_FAMILIES}")

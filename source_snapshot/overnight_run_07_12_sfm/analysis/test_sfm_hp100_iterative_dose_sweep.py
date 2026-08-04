@@ -258,6 +258,33 @@ def test_p1_dominant_family_is_new_paired_and_p1_is_not_weaker():
         assert treatment.negative_passes == 4
 
 
+def test_balanced_depth_changes_only_pass_depth_and_caps_negative_passes():
+    doses = SWEEP.declared_doses("balanced_depth")
+    assert len(doses) == 8
+    expected = {
+        "balanced2": (2, 2),
+        "balanced4": (4, 4),
+        "balanced8": (8, 4),
+        "balanced16": (16, 4),
+    }
+    prior_names = {
+        dose.name
+        for family in ("original", "p1_dominant")
+        for dose in SWEEP.declared_doses(family)
+    }
+    assert not ({dose.name for dose in doses} & prior_names)
+    for pair, (positive_passes, negative_passes) in expected.items():
+        rows = [dose for dose in doses if dose.pair == pair]
+        control = next(row for row in rows if row.positive_only)
+        treatment = next(row for row in rows if not row.positive_only)
+        for row in rows:
+            assert row.p1_learning_rate == row.p2_learning_rate == 1.0e-5
+            assert row.p1_passes == row.p2_passes == positive_passes
+        assert treatment.negative_learning_rate == 3.0e-5
+        assert treatment.negative_alpha == 0.1
+        assert treatment.negative_passes == negative_passes
+
+
 def test_parser_selects_dose_family():
     common = [
         "--repo-root", "/repo", "--expected-source-commit", "a" * 40,
@@ -269,6 +296,9 @@ def test_parser_selects_dose_family():
     assert SWEEP.parser().parse_args(
         [*common, "--dose-family", "p1_dominant"]
     ).dose_family == "p1_dominant"
+    assert SWEEP.parser().parse_args(
+        [*common, "--dose-family", "balanced_depth"]
+    ).dose_family == "balanced_depth"
 
 
 def test_completed_cycle_authenticates_and_tampering_fails(tmp_path):
