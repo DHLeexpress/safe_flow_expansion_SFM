@@ -656,17 +656,27 @@ def _full_rerun_decision(
 
 def _targeted_recovery_attribution(
     alpha0_rows: Sequence[dict], treatment_rows: Sequence[dict],
+    r0_rows: Sequence[dict] | None = None,
 ) -> dict:
     alpha0 = {row["lineage"]: row for row in alpha0_rows}
     treatment = {row["lineage"]: row for row in treatment_rows}
     if alpha0.keys() != treatment.keys():
         raise ValueError("alpha0 and treatment targeted lineages differ")
+    r0 = None if r0_rows is None else {
+        row["lineage"]: row for row in r0_rows
+    }
+    if r0 is not None and r0.keys() != alpha0.keys():
+        raise ValueError("r0 and alpha0 targeted lineages differ")
     deltas = []
     for lineage in sorted(treatment):
         alpha0_row = alpha0[lineage]
         treatment_row = treatment[lineage]
         deltas.append({
             "lineage": lineage,
+            "r0_recovered": (
+                None if r0 is None else bool(r0[lineage]["recovered"])
+            ),
+            "r0_status": None if r0 is None else r0[lineage]["status"],
             "alpha0_recovered": bool(alpha0_row["recovered"]),
             "treatment_recovered": bool(treatment_row["recovered"]),
             "treatment_minus_alpha0_recovered": int(
@@ -679,7 +689,14 @@ def _targeted_recovery_attribution(
                 - int(alpha0_row["sample_counts"].get(group, 0))
                 for group in ("P1", "P2", "Dminus")
             },
+            "alpha0_minus_r0_recovered": (
+                None if r0 is None else
+                int(alpha0_row["recovered"]) - int(r0[lineage]["recovered"])
+            ),
         })
+    r0_recovered = None if r0 is None else sum(
+        row["recovered"] for row in r0_rows
+    )
     alpha0_recovered = sum(row["recovered"] for row in alpha0_rows)
     treatment_recovered = sum(row["recovered"] for row in treatment_rows)
     incremental = sum(
@@ -691,6 +708,7 @@ def _targeted_recovery_attribution(
         for row in deltas
     )
     return {
+        "r0_recovered": None if r0_recovered is None else int(r0_recovered),
         "alpha0_recovered": int(alpha0_recovered),
         "treatment_recovered": int(treatment_recovered),
         "incremental_recoveries_treatment_over_alpha0": int(incremental),
@@ -698,6 +716,10 @@ def _targeted_recovery_attribution(
         "net_incremental_recoveries": int(incremental - regressions),
         "alpha_effect_supported_by_recovery_count": bool(
             treatment_recovered > alpha0_recovered
+        ),
+        "positive_anchor_minus_r0_recovered": (
+            None if r0_recovered is None else
+            int(alpha0_recovered - r0_recovered)
         ),
         "rows": deltas,
     }
@@ -1095,13 +1117,16 @@ def run(args) -> dict:
             reconstructed_audit,
             seed=config.seed,
         )
+        targeted_r0 = []
         targeted_alpha0 = []
         targeted_treatment = []
         targeted_events = []
         targeted_samples = []
-        # Alpha0 and treatment each reconstruct fresh mutable SFM state and use
-        # identical archived raw x0 at t-3..t. Repair seeds are also identical.
+        # R0, alpha0, and treatment each reconstruct fresh mutable SFM state
+        # and use identical archived raw x0 at t-3..t. Repair seeds are also
+        # identical, so recovery changes are attributable to model changes.
         for model_label, model, destination in (
+            ("r0", pre_adapter, targeted_r0),
             ("alpha0_positive_anchor", anchor_adapter, targeted_alpha0),
             ("treatment", adapter, targeted_treatment),
         ):
@@ -1136,8 +1161,9 @@ def run(args) -> dict:
                 targeted_samples.extend(samples)
                 destination.append({**result, "model": model_label})
         attribution = _targeted_recovery_attribution(
-            targeted_alpha0, targeted_treatment,
+            targeted_alpha0, targeted_treatment, targeted_r0,
         )
+        r0_recovered = attribution["r0_recovered"]
         alpha0_recovered = attribution["alpha0_recovered"]
         recovered = attribution["treatment_recovered"]
         incremental_recoveries = attribution[
@@ -1282,7 +1308,11 @@ def run(args) -> dict:
         },
         "targeted_Nplus1": {
             "N": CAUSAL_N, "steps": TARGETED_STEPS,
+            "r0_recovered": int(r0_recovered),
             "alpha0_recovered": int(alpha0_recovered),
+            "positive_anchor_minus_r0_recovered": int(
+                attribution["positive_anchor_minus_r0_recovered"]
+            ),
             "treatment_recovered": int(recovered),
             "incremental_recoveries_treatment_over_alpha0": int(
                 incremental_recoveries
@@ -1304,6 +1334,7 @@ def run(args) -> dict:
             "minimum_for_full_rerun": int(args.min_recovered),
             "treatment_behavior_gate_passed": bool(gate_passed),
             "full_rerun_gate_is_not_an_alpha_attribution_claim": True,
+            "r0_rows": targeted_r0,
             "alpha0_rows": targeted_alpha0,
             "treatment_rows": targeted_treatment,
             "treatment_minus_alpha0": attribution["rows"],

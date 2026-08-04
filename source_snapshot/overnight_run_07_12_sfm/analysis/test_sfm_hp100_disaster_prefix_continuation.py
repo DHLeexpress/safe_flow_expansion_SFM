@@ -367,16 +367,20 @@ def test_behavior_gate_and_alpha_effect_attribution_are_separate():
     # Same aggregate recovery, but one incremental repair and one regression:
     # behavior gate passes; alpha-effect claim must remain false.
     treatment = [row(f"L{index}", index in {0, 1, 2, 4}) for index in range(6)]
-    attribution = CONT._targeted_recovery_attribution(alpha0, treatment)
+    r0 = [row(f"L{index}", index < 2) for index in range(6)]
+    attribution = CONT._targeted_recovery_attribution(alpha0, treatment, r0)
     assert CONT._full_rerun_decision(
         attribution["treatment_recovered"], 4, False,
     ) == (True, True)
     assert attribution["incremental_recoveries_treatment_over_alpha0"] == 1
     assert attribution["incremental_regressions_treatment_vs_alpha0"] == 1
     assert attribution["alpha_effect_supported_by_recovery_count"] is False
+    assert attribution["r0_recovered"] == 2
+    assert attribution["positive_anchor_minus_r0_recovered"] == 2
+    assert attribution["rows"][0]["r0_status"] == "survived_N_plus_1"
 
     treatment[5] = row("L5", True)
-    attribution = CONT._targeted_recovery_attribution(alpha0, treatment)
+    attribution = CONT._targeted_recovery_attribution(alpha0, treatment, r0)
     assert attribution["treatment_recovered"] == 5
     assert attribution["alpha_effect_supported_by_recovery_count"] is True
 
