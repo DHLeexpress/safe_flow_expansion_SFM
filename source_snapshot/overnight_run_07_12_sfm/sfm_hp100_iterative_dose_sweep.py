@@ -33,6 +33,7 @@ COMPLETE_STATUS = "SFM_HP100_ITERATIVE_DOSE_SWEEP_COMPLETE"
 NO_WINNER_STATUS = "SFM_HP100_ITERATIVE_DOSE_SWEEP_NO_ELIGIBLE_CELL"
 EXPECTED_EVIDENCE_SOURCE_COMMIT = "15231d30ff4af8427509464dd827490a221b3c78"
 SCOPES = ("head_only", "last_block_and_head")
+DOSE_FAMILIES = ("original", "p1_dominant")
 
 
 @dataclass(frozen=True)
@@ -52,14 +53,24 @@ class Dose:
         return self.negative_alpha == 0.0
 
 
-def declared_doses() -> tuple[Dose, ...]:
-    """Four paired positive anchors with matched Ncausal treatments."""
-    rows = (
-        ("soft1", 1.0e-5, 1, 3.0e-4, 1, 3.0e-5, 4),
-        ("selected1", 1.0e-5, 1, 1.0e-3, 1, 1.0e-4, 4),
-        ("repeat4", 1.0e-5, 4, 3.0e-4, 4, 3.0e-5, 16),
-        ("sufficient4", 3.0e-5, 4, 1.0e-3, 4, 1.0e-4, 16),
-    )
+def declared_doses(family: str = "original") -> tuple[Dose, ...]:
+    """Return one declared table of paired positive/Ncausal cells."""
+    if family == "original":
+        rows = (
+            ("soft1", 1.0e-5, 1, 3.0e-4, 1, 3.0e-5, 4),
+            ("selected1", 1.0e-5, 1, 1.0e-3, 1, 1.0e-4, 4),
+            ("repeat4", 1.0e-5, 4, 3.0e-4, 4, 3.0e-5, 16),
+            ("sufficient4", 3.0e-5, 4, 1.0e-3, 4, 1.0e-4, 16),
+        )
+    elif family == "p1_dominant":
+        rows = (
+            ("balanced1", 1.0e-5, 1, 1.0e-5, 1, 3.0e-5, 4),
+            ("retain1", 3.0e-5, 1, 1.0e-5, 1, 3.0e-5, 4),
+            ("anchor4", 3.0e-5, 4, 1.0e-6, 1, 3.0e-5, 4),
+            ("p1strong", 1.0e-4, 1, 1.0e-6, 1, 3.0e-5, 4),
+        )
+    else:
+        raise ValueError(f"dose family must be one of {DOSE_FAMILIES}")
     doses = []
     for pair, p1_lr, p1_passes, p2_lr, p2_passes, negative_lr, negative_passes in rows:
         doses.extend((
@@ -518,6 +529,7 @@ def run(args) -> dict:
     if output == repo or repo in output.parents:
         raise ValueError("sweep output must remain outside the source worktree")
     source_gate = SWEEP.source_gate(repo, args.expected_source_commit)
+    doses = declared_doses(args.dose_family)
     inputs = load_completed_cycle(
         args.iterative_root,
         args.expected_iterative_marker_sha256,
@@ -580,7 +592,8 @@ def run(args) -> dict:
                 )
             },
             "config": asdict(config),
-            "doses": [asdict(dose) for dose in declared_doses()],
+            "dose_family": args.dose_family,
+            "doses": [asdict(dose) for dose in doses],
             "scopes": list(SCOPES),
             "same_checkpoint_view_and_raw_CRN_for_every_cell": True,
             "baseline_rerun_canonical_sha256": baseline_canonical,
@@ -609,9 +622,11 @@ def run(args) -> dict:
             batch_size=int(config.batch_size),
             max_relative_parameter_drift=float(config.max_relative_parameter_drift),
             seed=int(config.seed),
+            doses=doses,
             raw_crn_reference=baseline_rerun,
         )
     result.update(
+        dose_family=args.dose_family,
         preflight=str(preflight_path),
         preflight_sha256=HYBRID._sha256(preflight_path),
         source_HEAD=source_gate["HEAD"],
@@ -627,6 +642,9 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--iterative-root", required=True)
     value.add_argument("--expected-iterative-marker-sha256", required=True)
     value.add_argument("--cycle", required=True, type=int)
+    value.add_argument(
+        "--dose-family", choices=DOSE_FAMILIES, default="original",
+    )
     value.add_argument("--output", required=True)
     value.add_argument("--device", default="cuda:0")
     value.add_argument("--physical-gpu", required=True, type=int)

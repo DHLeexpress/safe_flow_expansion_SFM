@@ -215,7 +215,7 @@ def _make_iterative_root(tmp_path):
 
 
 def test_declared_doses_have_matched_positive_controls_and_treatments():
-    doses = SWEEP.declared_doses()
+    doses = SWEEP.declared_doses("original")
     assert len(doses) == 8
     for pair in {dose.pair for dose in doses}:
         rows = [dose for dose in doses if dose.pair == pair]
@@ -230,6 +230,45 @@ def test_declared_doses_have_matched_positive_controls_and_treatments():
             treatment.p2_learning_rate, treatment.p2_passes,
         )
         assert treatment.negative_alpha == 0.1
+
+
+def test_p1_dominant_family_is_new_paired_and_p1_is_not_weaker():
+    doses = SWEEP.declared_doses("p1_dominant")
+    assert len(doses) == 8
+    assert {dose.pair for dose in doses} == {
+        "balanced1", "retain1", "anchor4", "p1strong",
+    }
+    assert not ({dose.name for dose in doses} & {
+        dose.name for dose in SWEEP.declared_doses("original")
+    })
+    for pair in {dose.pair for dose in doses}:
+        rows = [dose for dose in doses if dose.pair == pair]
+        control = next(row for row in rows if row.positive_only)
+        treatment = next(row for row in rows if not row.positive_only)
+        assert control.p1_learning_rate >= control.p2_learning_rate
+        assert (
+            control.p1_learning_rate, control.p1_passes,
+            control.p2_learning_rate, control.p2_passes,
+        ) == (
+            treatment.p1_learning_rate, treatment.p1_passes,
+            treatment.p2_learning_rate, treatment.p2_passes,
+        )
+        assert treatment.negative_learning_rate == 3.0e-5
+        assert treatment.negative_alpha == 0.1
+        assert treatment.negative_passes == 4
+
+
+def test_parser_selects_dose_family():
+    common = [
+        "--repo-root", "/repo", "--expected-source-commit", "a" * 40,
+        "--iterative-root", "/iterative",
+        "--expected-iterative-marker-sha256", "b" * 64,
+        "--cycle", "1", "--output", "/output", "--physical-gpu", "3",
+    ]
+    assert SWEEP.parser().parse_args(common).dose_family == "original"
+    assert SWEEP.parser().parse_args(
+        [*common, "--dose-family", "p1_dominant"]
+    ).dose_family == "p1_dominant"
 
 
 def test_completed_cycle_authenticates_and_tampering_fails(tmp_path):
