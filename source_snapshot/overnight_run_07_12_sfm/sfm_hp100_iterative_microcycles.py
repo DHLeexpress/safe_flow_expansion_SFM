@@ -5,9 +5,11 @@ sweep.  Every microcycle resets and gathers the same canonical 4x4 lineages,
 derives a fresh N=3 causal-negative view from that cycle only, applies the
 selected P2/P1/Ncausal-only dose, and evaluates all 16 lineages with one fixed
 raw temperature-one CRN.  Candidate updates are transactional: a candidate
-is retained only when it preserves every previously CLEAR lineage, does not
-decrease exact-positive prefix coverage on lineages that remain non-CLEAR or
-aggregate goal progress, and strictly improves at least one gate quantity.
+is retained only when it strictly increases raw temperature-one CLEAR
+lineages, preserves every previously CLEAR lineage, and does not decrease
+exact-positive prefix coverage on lineages that remain non-CLEAR or aggregate
+goal progress.  Full 16/16 CLEAR is an early-stop condition, not an acceptance
+requirement.
 
 No microcycle sample enters GP support or a replay archive.  Checkpoints from
 this module remain diagnostic-only until a separate disjoint evaluation.
@@ -388,11 +390,8 @@ def _acceptance_decision(parent: dict, candidate: dict, *, epsilon: float = 1.0e
         delta >= 0 for delta in per_lineage_prefix_delta.values()
     )
     progress_nonnegative = progress_delta >= -float(epsilon)
-    strict = bool(
-        len(candidate_clear) > len(parent_clear)
-        or any(delta > 0 for delta in per_lineage_prefix_delta.values())
-        or progress_delta > float(epsilon)
-    )
+    raw_success_delta = len(candidate_clear) - len(parent_clear)
+    strict = raw_success_delta > 0
     return {
         "accepted": bool(
             clear_preserved and prefix_nonnegative
@@ -407,6 +406,8 @@ def _acceptance_decision(parent: dict, candidate: dict, *, epsilon: float = 1.0e
         "candidate_nonclear_prefix_nondecrease": prefix_nonnegative,
         "CLEAR_lineages_exempt_from_prefix_length_gate": True,
         "goal_progress_nondecrease": progress_nonnegative,
+        "raw_temperature_one_CLEAR_delta": raw_success_delta,
+        "raw_temperature_one_success_strictly_increased": strict,
         "strict_improvement": strict,
         "epsilon": float(epsilon),
     }

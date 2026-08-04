@@ -219,6 +219,27 @@ def test_new_faster_success_is_exempt_from_global_prefix_nondecrease():
     assert decision["accepted"] is True
 
 
+def test_prefix_or_progress_gain_without_raw_success_is_rejected():
+    parent = {
+        "clear_lineages": [], "exact_positive_prefix_sum": 10,
+        "aggregate_goal_progress": 1.0,
+        "outcomes": {"open": {"steps": 10, "clear": False}},
+    }
+    candidate = {
+        "clear_lineages": [], "exact_positive_prefix_sum": 12,
+        "aggregate_goal_progress": 1.2,
+        "outcomes": {"open": {"steps": 12, "clear": False}},
+    }
+
+    decision = ITER._acceptance_decision(parent, candidate)
+
+    assert decision["candidate_nonclear_prefix_nondecrease"] is True
+    assert decision["goal_progress_nondecrease"] is True
+    assert decision["raw_temperature_one_CLEAR_delta"] == 0
+    assert decision["raw_temperature_one_success_strictly_increased"] is False
+    assert decision["accepted"] is False
+
+
 def test_loop_gathers_all_16_then_accepts_all_clear_without_replay(tmp_path):
     config = HYBRID.HybridConfig(max_microcycles=5)
     keys = HYBRID._lineage_keys(config)
