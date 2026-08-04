@@ -147,14 +147,25 @@ def canonical_sha256(value: Any) -> str:
 
 
 def _validate_selection_marker(marker: dict) -> FixedDose:
-    if marker.get("status") != "SFM_HP100_DISASTER_PREFIX_SWEEP_COMPLETE":
-        raise ValueError("selection marker is not a completed compact sweep")
-    if marker.get("eligible_for_phase2") is not True:
-        raise ValueError("selected sweep is not eligible_for_phase2")
-    if marker.get("disjoint_M50_incremental_gate_confirmed") is not True:
-        raise ValueError("selected sweep lacks the disjoint incremental gate")
-    if marker.get("disjoint_M50_strict_r0_win") is not True:
-        raise ValueError("selected sweep lacks the disjoint strict-r0 gate")
+    status = marker.get("status")
+    if status == "SFM_HP100_DISASTER_PREFIX_SWEEP_COMPLETE":
+        if marker.get("eligible_for_phase2") is not True:
+            raise ValueError("selected sweep is not eligible_for_phase2")
+        if marker.get("disjoint_M50_incremental_gate_confirmed") is not True:
+            raise ValueError("selected sweep lacks the disjoint incremental gate")
+        if marker.get("disjoint_M50_strict_r0_win") is not True:
+            raise ValueError("selected sweep lacks the disjoint strict-r0 gate")
+    elif status == "SFM_HP100_SECONDARY_COMBINED_R0_CONFIRMATION_COMPLETE":
+        if marker.get("eligible_for_iterative_microcycles") is not True:
+            raise ValueError("secondary combined confirmation is not eligible")
+        if marker.get("combined_M50_strict_r0_win") is not True:
+            raise ValueError("secondary marker lacks the strict-r0 M50 gate")
+        if marker.get("primary_incremental_null_preserved") is not True:
+            raise ValueError("secondary marker does not preserve the primary null")
+        if marker.get("primary_incremental_claim") is not False:
+            raise ValueError("secondary marker makes an incremental Ncausal claim")
+    else:
+        raise ValueError("selection marker is not a supported completed confirmation")
     if marker.get("selected_scope") not in {
         "head_only", "last_block_and_head",
     }:
