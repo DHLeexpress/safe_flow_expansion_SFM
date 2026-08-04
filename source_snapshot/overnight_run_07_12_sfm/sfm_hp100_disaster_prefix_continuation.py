@@ -9,10 +9,14 @@ source artifact.
 
 The treatment is deliberately isolated from the alpha-zero control:
 
-1. retained P2 attraction, one exposure, Adam at 1e-3;
-2. retained P1 retention, one exposure, fresh Adam at 1e-5;
-3. all original Dminus plus Ncausal, one negative-ascent exposure, fresh Adam
-   at ``negative_lr * alpha`` (1e-4 * .01 = 1e-6 by default).
+1. retained P2 attraction, one pass by default, Adam at 1e-3;
+2. retained P1 retention, one pass by default, fresh Adam at 1e-5;
+3. all original Dminus plus Ncausal, one negative-ascent pass by default,
+   fresh Adam at ``negative_lr * alpha`` (1e-4 * .01 = 1e-6 by default).
+
+Each phase may make multiple exact passes while retaining one Adam instance
+within that phase.  ``Ncausal_only`` is an optional negative source; the
+default remains the original Dminus-plus-Ncausal treatment.
 
 The alpha-zero control is exactly the model after phases 1--2.  A targeted
 four-step hybrid audit starts from each reconstructed t-3 state.  Only if at
@@ -56,6 +60,7 @@ CAUSAL_N = 3
 AUDIT_M = 64
 TARGETED_STEPS = CAUSAL_N + 1
 EXPECTED_EXHAUSTED = 6
+NEGATIVE_SOURCES = ("Ncausal_only", "Dminus_plus_Ncausal")
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -269,31 +274,56 @@ def _one_exposure_attraction(
     batch_size: int,
     seed: int,
     phase: str,
+    passes: int = 1,
 ) -> dict:
+    if int(passes) < 1:
+        raise ValueError("attraction passes must be positive")
     parameters = _trainable_parameters(adapter)
     device = parameters[0].device
-    order = np.random.default_rng(_counter_seed(seed, phase, "order")).permutation(len(rows))
-    ordered = [rows[int(index)] for index in order]
     optimizer = torch.optim.Adam(parameters, lr=float(learning_rate))
     losses = []
     steps = 0
-    for batch_index, start in enumerate(range(0, len(ordered), int(batch_size))):
-        batch = ordered[start:start + int(batch_size)]
-        contexts, candidates = HYBRID._stack_rows(batch, device)
-        HYBRID._set_step_seed(
-            _counter_seed(seed, phase, "cfm", batch_index), device,
+    order_seeds = []
+    for pass_index in range(int(passes)):
+        # Pass zero preserves the original one-pass CRN exactly. Additional
+        # passes receive distinct counter coordinates without resetting Adam.
+        order_seed = (
+            _counter_seed(seed, phase, "order")
+            if pass_index == 0 else
+            _counter_seed(seed, phase, "pass", pass_index, "order")
         )
-        loss = adapter.cfm_loss(contexts, candidates, reduction="mean")
-        optimizer.zero_grad(); loss.backward(); optimizer.step()
-        losses.append(float(loss.detach()))
-        steps += 1
+        order_seeds.append(int(order_seed))
+        order = np.random.default_rng(order_seed).permutation(len(rows))
+        ordered = [rows[int(index)] for index in order]
+        for batch_index, start in enumerate(
+            range(0, len(ordered), int(batch_size))
+        ):
+            batch = ordered[start:start + int(batch_size)]
+            contexts, candidates = HYBRID._stack_rows(batch, device)
+            HYBRID._set_step_seed(
+                (
+                    _counter_seed(seed, phase, "cfm", batch_index)
+                    if pass_index == 0 else
+                    _counter_seed(
+                        seed, phase, "pass", pass_index, "cfm", batch_index,
+                    )
+                ),
+                device,
+            )
+            loss = adapter.cfm_loss(contexts, candidates, reduction="mean")
+            optimizer.zero_grad(); loss.backward(); optimizer.step()
+            losses.append(float(loss.detach()))
+            steps += 1
     return {
-        "phase": phase, "role": "CFM attraction", "rows": len(ordered),
-        "unique_source_identities": len({_sample_identity(row) for row in ordered}),
-        "exposures_per_row": 1, "adam_steps": int(steps),
+        "phase": phase, "role": "CFM attraction", "rows": len(rows),
+        "unique_source_identities": len({_sample_identity(row) for row in rows}),
+        "passes": int(passes), "exposures_per_row": int(passes),
+        "total_row_exposures": int(len(rows) * int(passes)),
+        "adam_steps": int(steps),
         "learning_rate": float(learning_rate),
         "mean_batch_loss": float(np.mean(losses)) if losses else None,
-        "fresh_adam": True,
+        "fresh_adam": True, "optimizer_instances": 1,
+        "deterministic_fresh_order_seed_per_pass": order_seeds,
     }
 
 
@@ -305,42 +335,70 @@ def _one_exposure_negative_ascent(
     alpha: float,
     batch_size: int,
     seed: int,
+    passes: int = 1,
+    phase: str = "Dminus_plus_Ncausal_negative_ascent",
 ) -> dict:
     if negative_learning_rate < 0.0 or alpha < 0.0:
         raise ValueError("negative learning rate and alpha must be nonnegative")
+    if int(passes) < 1:
+        raise ValueError("negative passes must be positive")
     parameters = _trainable_parameters(adapter)
     device = parameters[0].device
-    order = np.random.default_rng(
-        _counter_seed(seed, "Dminus_Ncausal_negative_ascent", "order")
-    ).permutation(len(rows))
-    ordered = [rows[int(index)] for index in order]
     effective_lr = float(negative_learning_rate) * float(alpha)
     optimizer = torch.optim.Adam(parameters, lr=effective_lr)
     losses = []
     steps = 0
-    for batch_index, start in enumerate(range(0, len(ordered), int(batch_size))):
-        batch = ordered[start:start + int(batch_size)]
-        contexts, candidates = HYBRID._stack_rows(batch, device)
-        HYBRID._set_step_seed(
-            _counter_seed(seed, "Dminus_Ncausal_negative_ascent", batch_index),
-            device,
+    order_seeds = []
+    seed_namespace = (
+        "Dminus_Ncausal_negative_ascent"
+        if phase == "Dminus_plus_Ncausal_negative_ascent" else phase
+    )
+    for pass_index in range(int(passes)):
+        order_seed = (
+            _counter_seed(seed, seed_namespace, "order")
+            if pass_index == 0 else
+            _counter_seed(
+                seed, seed_namespace, "pass", pass_index, "order",
+            )
         )
-        cfm_loss = adapter.cfm_loss(contexts, candidates, reduction="mean")
-        objective = -cfm_loss
-        optimizer.zero_grad(); objective.backward(); optimizer.step()
-        losses.append(float(cfm_loss.detach()))
-        steps += 1
+        order_seeds.append(int(order_seed))
+        order = np.random.default_rng(order_seed).permutation(len(rows))
+        ordered = [rows[int(index)] for index in order]
+        for batch_index, start in enumerate(
+            range(0, len(ordered), int(batch_size))
+        ):
+            batch = ordered[start:start + int(batch_size)]
+            contexts, candidates = HYBRID._stack_rows(batch, device)
+            HYBRID._set_step_seed(
+                (
+                    _counter_seed(seed, seed_namespace, batch_index)
+                    if pass_index == 0 else
+                    _counter_seed(
+                        seed, seed_namespace, "pass", pass_index,
+                        "cfm", batch_index,
+                    )
+                ),
+                device,
+            )
+            cfm_loss = adapter.cfm_loss(contexts, candidates, reduction="mean")
+            objective = -cfm_loss
+            optimizer.zero_grad(); objective.backward(); optimizer.step()
+            losses.append(float(cfm_loss.detach()))
+            steps += 1
     return {
-        "phase": "Dminus_plus_Ncausal_negative_ascent",
+        "phase": phase,
         "role": "maximize CFM loss on declared negative training views",
-        "rows": len(ordered), "exposures_per_row": 1,
+        "rows": len(rows), "passes": int(passes),
+        "exposures_per_row": int(passes),
+        "total_row_exposures": int(len(rows) * int(passes)),
         "adam_steps": int(steps),
         "requested_negative_learning_rate": float(negative_learning_rate),
         "alpha": float(alpha), "effective_learning_rate": effective_lr,
         "mean_CFM_loss_before_ascent_step": (
             float(np.mean(losses)) if losses else None
         ),
-        "fresh_adam": True,
+        "fresh_adam": True, "optimizer_instances": 1,
+        "deterministic_fresh_order_seed_per_pass": order_seeds,
     }
 
 
@@ -355,20 +413,28 @@ def apply_disaster_prefix_update(
     batch_size: int,
     max_relative_parameter_drift: float,
     seed: int,
+    p1_passes: int = 1,
+    p2_passes: int = 1,
+    negative_passes: int = 1,
+    negative_source: str = "Dminus_plus_Ncausal",
 ) -> dict:
     """Create one shared positive anchor, then treatment-only negative ascent."""
+    if negative_source not in NEGATIVE_SOURCES:
+        raise ValueError(f"negative_source must be one of {NEGATIVE_SOURCES}")
+    if min(int(p1_passes), int(p2_passes), int(negative_passes)) < 1:
+        raise ValueError("P1, P2, and negative passes must be positive")
     parameters = _trainable_parameters(adapter)
     before = HYBRID._parameter_snapshot(parameters)
     before_sha = _model_state_sha256(adapter)
     p2 = _one_exposure_attraction(
         adapter, training_view["retained_P2"],
         learning_rate=p2_learning_rate, batch_size=batch_size,
-        seed=seed, phase="retained_P2_attraction",
+        seed=seed, phase="retained_P2_attraction", passes=p2_passes,
     )
     p1 = _one_exposure_attraction(
         adapter, training_view["retained_P1"],
         learning_rate=p1_learning_rate, batch_size=batch_size,
-        seed=seed, phase="retained_P1_retention",
+        seed=seed, phase="retained_P1_retention", passes=p1_passes,
     )
     positive_anchor_sha = _model_state_sha256(adapter)
     positive_anchor_state = {
@@ -378,12 +444,39 @@ def apply_disaster_prefix_update(
     # The alpha-zero control is literally this state, not a separately rerun
     # stochastic optimization.  This makes the isolation bitwise by design.
     alpha0_control_sha = positive_anchor_sha
-    negative_rows = [*training_view["Dminus"], *training_view["Ncausal"]]
+    negative_source_rows = {
+        "Dminus": list(training_view["Dminus"]),
+        "Ncausal": list(training_view["Ncausal"]),
+    }
+    negative_rows = (
+        negative_source_rows["Ncausal"]
+        if negative_source == "Ncausal_only"
+        else [*negative_source_rows["Dminus"], *negative_source_rows["Ncausal"]]
+    )
+    negative_phase = (
+        "Ncausal_negative_ascent"
+        if negative_source == "Ncausal_only"
+        else "Dminus_plus_Ncausal_negative_ascent"
+    )
     negative = _one_exposure_negative_ascent(
         adapter, negative_rows,
         negative_learning_rate=negative_learning_rate, alpha=alpha,
-        batch_size=batch_size, seed=seed,
+        batch_size=batch_size, seed=seed, passes=negative_passes,
+        phase=negative_phase,
     )
+    negative.update({
+        "negative_source": negative_source,
+        "available_source_counts": {
+            key: len(value) for key, value in negative_source_rows.items()
+        },
+        "selected_source_counts": {
+            "Dminus": (
+                len(negative_source_rows["Dminus"])
+                if negative_source == "Dminus_plus_Ncausal" else 0
+            ),
+            "Ncausal": len(negative_source_rows["Ncausal"]),
+        },
+    })
     treatment_sha_before_gate = _model_state_sha256(adapter)
     drift = HYBRID._relative_parameter_drift(parameters, before)
     finite = HYBRID._finite_parameters(parameters)
@@ -404,7 +497,7 @@ def apply_disaster_prefix_update(
         "treatment_model_sha256_after_gate": _model_state_sha256(adapter),
         "phase_order": [
             "retained_P2_attraction", "retained_P1_retention",
-            "Dminus_plus_Ncausal_negative_ascent",
+            negative_phase,
         ],
         "P2": p2, "P1": p1, "negative": negative,
         "atomic_rollback": not accepted,
@@ -1028,13 +1121,21 @@ def run(args) -> dict:
         "training_view": _exclusive_training_counts(training),
         "update": {
             "P2_lr": float(args.p2_learning_rate),
+            "P2_passes": int(args.p2_passes),
             "P1_lr": float(args.p1_learning_rate),
+            "P1_passes": int(args.p1_passes),
             "negative_lr": float(args.negative_learning_rate),
             "negative_alpha": float(args.negative_alpha),
+            "negative_passes": int(args.negative_passes),
+            "negative_source": str(args.negative_source),
             "negative_effective_lr": (
                 float(args.negative_learning_rate) * float(args.negative_alpha)
             ),
-            "N": CAUSAL_N, "one_exposure_per_row": True,
+            "N": CAUSAL_N,
+            "one_exposure_per_row": bool(
+                int(args.p1_passes) == int(args.p2_passes)
+                == int(args.negative_passes) == 1
+            ),
         },
         "audit": {
             "fixed_raw_base_M": AUDIT_M,
@@ -1059,7 +1160,10 @@ def run(args) -> dict:
         negative_learning_rate=float(args.negative_learning_rate),
         alpha=float(args.negative_alpha), batch_size=int(args.batch_size),
         max_relative_parameter_drift=float(args.max_relative_parameter_drift),
-        seed=config.seed,
+        seed=config.seed, p1_passes=int(args.p1_passes),
+        p2_passes=int(args.p2_passes),
+        negative_passes=int(args.negative_passes),
+        negative_source=str(args.negative_source),
     )
     positive_anchor_state = update.pop("_positive_anchor_state_dict")
     anchor_checkpoint = output / "checkpoint_alpha0_positive_anchor.pt"
@@ -1088,7 +1192,11 @@ def run(args) -> dict:
     _torch_save(treatment_checkpoint, _diagnostic_checkpoint_payload(
         adapter, checkpoint_sha256=checkpoint_sha,
         optimizer_scope=args.optimizer_scope,
-        role="positive_anchor_plus_Dminus_Ncausal_negative_ascent",
+        role=(
+            "positive_anchor_plus_Dminus_Ncausal_negative_ascent"
+            if args.negative_source == "Dminus_plus_Ncausal" else
+            "positive_anchor_plus_Ncausal_negative_ascent"
+        ),
     ))
 
     events_by_lineage = _events_by_lineage(trace)
@@ -1395,9 +1503,16 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--scenario-start", type=int, default=500_000)
     value.add_argument("--verifier-workers", type=int, default=16)
     value.add_argument("--p2-learning-rate", type=float, default=1.0e-3)
+    value.add_argument("--p2-passes", type=int, default=1)
     value.add_argument("--p1-learning-rate", type=float, default=1.0e-5)
+    value.add_argument("--p1-passes", type=int, default=1)
     value.add_argument("--negative-learning-rate", type=float, default=1.0e-4)
     value.add_argument("--negative-alpha", type=float, default=0.01)
+    value.add_argument("--negative-passes", type=int, default=1)
+    value.add_argument(
+        "--negative-source", choices=NEGATIVE_SOURCES,
+        default="Dminus_plus_Ncausal",
+    )
     value.add_argument("--batch-size", type=int, default=64)
     value.add_argument("--max-relative-parameter-drift", type=float, default=0.25)
     value.add_argument("--min-recovered", type=int, default=4)
@@ -1413,6 +1528,8 @@ def main(argv=None) -> int:
         raise ValueError("P1/P2 learning rates must be positive")
     if args.negative_learning_rate < 0.0 or args.negative_alpha < 0.0:
         raise ValueError("negative learning rate and alpha must be nonnegative")
+    if min(args.p1_passes, args.p2_passes, args.negative_passes) < 1:
+        raise ValueError("P1, P2, and negative passes must be positive")
     if args.batch_size < 1 or args.verifier_workers < 1:
         raise ValueError("batch size and verifier workers must be positive")
     marker = run(args)

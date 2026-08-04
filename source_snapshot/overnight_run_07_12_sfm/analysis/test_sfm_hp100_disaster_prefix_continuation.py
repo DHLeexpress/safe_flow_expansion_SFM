@@ -142,11 +142,128 @@ def test_update_uses_one_shared_positive_anchor_then_treatment_only_ascent():
     assert report["negative"]["effective_learning_rate"] == pytest.approx(1.0e-6)
     assert report["P2"]["rows"] == report["P1"]["rows"] == 1
     assert report["negative"]["rows"] == 2
+    assert report["negative"]["negative_source"] == "Dminus_plus_Ncausal"
+    assert report["negative"]["selected_source_counts"] == {
+        "Dminus": 1, "Ncausal": 1,
+    }
+    assert report["P2"]["passes"] == report["P1"]["passes"] == 1
+    assert report["negative"]["passes"] == 1
+    assert report["P2"]["deterministic_fresh_order_seed_per_pass"] == [
+        CONT._counter_seed(2, "retained_P2_attraction", "order")
+    ]
+    assert report["negative"]["deterministic_fresh_order_seed_per_pass"] == [
+        CONT._counter_seed(2, "Dminus_Ncausal_negative_ascent", "order")
+    ]
     assert report["P2"]["exposures_per_row"] == 1
     assert report["P1"]["exposures_per_row"] == 1
     assert report["negative"]["exposures_per_row"] == 1
     assert not torch.equal(adapter.head.detach().cpu(), anchor["head"])
     assert torch.equal(adapter.frozen, frozen_before)
+
+
+def test_ncausal_only_uses_18_rows_and_exact_multi_pass_accounting():
+    trace, samples = _incomplete_trace_and_samples()
+    view = CONT.extract_disaster_training_view(trace, samples)
+    second_trace, second_samples = _incomplete_trace_and_samples()
+    second_view = CONT.extract_disaster_training_view(
+        second_trace, second_samples,
+    )
+    for row in second_view["Dminus"]:
+        row["candidate"] = torch.full_like(row["candidate"], 1.0e6)
+    first = _TinyAdapter()
+    second = _TinyAdapter()
+
+    kwargs = dict(
+        p2_learning_rate=1.0e-3, p1_learning_rate=1.0e-5,
+        negative_learning_rate=1.0e-4, alpha=0.01, batch_size=7,
+        max_relative_parameter_drift=1.0, seed=19,
+        p1_passes=2, p2_passes=3, negative_passes=4,
+        negative_source="Ncausal_only",
+    )
+    first_report = CONT.apply_disaster_prefix_update(first, view, **kwargs)
+    second_report = CONT.apply_disaster_prefix_update(second, second_view, **kwargs)
+    first_report.pop("_positive_anchor_state_dict")
+    second_report.pop("_positive_anchor_state_dict")
+
+    negative = first_report["negative"]
+    assert negative["negative_source"] == "Ncausal_only"
+    assert negative["available_source_counts"] == {
+        "Dminus": 12, "Ncausal": 18,
+    }
+    assert negative["selected_source_counts"] == {
+        "Dminus": 0, "Ncausal": 18,
+    }
+    assert negative["rows"] == 18
+    assert negative["passes"] == negative["exposures_per_row"] == 4
+    assert negative["total_row_exposures"] == 72
+    assert negative["adam_steps"] == 12  # 4 * ceil(18 / 7)
+    assert negative["optimizer_instances"] == 1
+    assert len(set(negative["deterministic_fresh_order_seed_per_pass"])) == 4
+    # Empty retained-positive pools still report their declared passes exactly.
+    assert first_report["P1"]["rows"] == first_report["P2"]["rows"] == 0
+    assert first_report["P1"]["passes"] == 2
+    assert first_report["P2"]["passes"] == 3
+    assert first_report["P1"]["adam_steps"] == 0
+    assert first_report["P2"]["adam_steps"] == 0
+    # Dminus has exactly zero loss/exposure influence in Ncausal-only mode:
+    # replacing every Dminus action by an extreme value leaves the update
+    # bitwise identical. Counter-derived ordering/CFM seeds are repeatable too.
+    assert first_report["treatment_model_sha256_after_gate"] == second_report[
+        "treatment_model_sha256_after_gate"
+    ]
+    assert torch.equal(first.head, second.head)
+
+
+def test_positive_multi_passes_use_one_optimizer_per_phase():
+    adapter = _TinyAdapter()
+    report = CONT.apply_disaster_prefix_update(
+        adapter, _training_view(), p2_learning_rate=1.0e-3,
+        p1_learning_rate=1.0e-5, negative_learning_rate=1.0e-4,
+        alpha=0.0, batch_size=64, max_relative_parameter_drift=1.0,
+        seed=2, p1_passes=5, p2_passes=3, negative_passes=2,
+    )
+    report.pop("_positive_anchor_state_dict")
+    assert report["P1"]["rows"] == 1
+    assert report["P1"]["passes"] == report["P1"]["exposures_per_row"] == 5
+    assert report["P1"]["total_row_exposures"] == 5
+    assert report["P1"]["adam_steps"] == 5
+    assert report["P1"]["optimizer_instances"] == 1
+    assert report["P2"]["passes"] == 3
+    assert report["P2"]["adam_steps"] == 3
+    assert report["negative"]["passes"] == 2
+    assert report["negative"]["adam_steps"] == 2
+
+
+def test_pass_validation_happens_before_any_parameter_update():
+    adapter = _TinyAdapter()
+    before = {key: value.clone() for key, value in adapter.state_dict().items()}
+    with pytest.raises(ValueError, match="passes must be positive"):
+        CONT.apply_disaster_prefix_update(
+            adapter, _training_view(), p2_learning_rate=1.0e-3,
+            p1_learning_rate=1.0e-5, negative_learning_rate=1.0e-4,
+            alpha=0.01, batch_size=64, max_relative_parameter_drift=1.0,
+            seed=2, p1_passes=0,
+        )
+    for key, value in adapter.state_dict().items():
+        assert torch.equal(value, before[key])
+
+
+def test_cli_defaults_preserve_one_pass_combined_negative_behavior():
+    args = CONT.parser().parse_args([
+        "--checkpoint", "r0.pt",
+        "--expected-checkpoint-sha256", "a" * 64,
+        "--prior-trace", "trace.pt",
+        "--expected-prior-trace-sha256", "b" * 64,
+        "--prior-staged-samples", "samples.pt",
+        "--expected-prior-staged-samples-sha256", "c" * 64,
+        "--pretrain-dataset-root", "dataset",
+        "--expected-pretrain-dataset-manifest-sha256", "d" * 64,
+        "--output", "out",
+        "--physical-gpu", "1",
+        "--optimizer-scope", "head_only",
+    ])
+    assert (args.p1_passes, args.p2_passes, args.negative_passes) == (1, 1, 1)
+    assert args.negative_source == "Dminus_plus_Ncausal"
 
 
 def test_update_rolls_back_all_three_phases_atomically_on_drift():
