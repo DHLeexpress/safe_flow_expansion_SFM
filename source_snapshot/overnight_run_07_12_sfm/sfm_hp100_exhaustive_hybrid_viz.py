@@ -29,6 +29,7 @@ P1_BLUE = "#0057FF"
 DMINUS_RED = "#FF1F1F"
 QUERY_GREEN = "#00A651"
 P2_CYAN = "#00B7C7"
+NCAUSAL_MAGENTA = "#D000C8"
 BLACK = "#111111"
 GRAY = "#777777"
 CLEAR_GREEN = "#148A2A"
@@ -219,6 +220,7 @@ def draw_cell(
     step: int,
     repair_attempt_index: int | None,
     post_recheck: bool,
+    show_causal_negative: bool = False,
 ) -> None:
     lineage = f"g{gamma:.9g}:rep{replica:02d}"
     selected = _latest_event(grouped, lineage, microcycle, step)
@@ -265,6 +267,30 @@ def draw_cell(
                 transform=axis.transAxes, ha="left", va="bottom",
                 fontsize=5.4, color="#075F65",
             )
+    if show_causal_negative:
+        for event in visible:
+            if not bool(event.get("causal_negative", False)):
+                continue
+            group = event.get("executed_group")
+            if group == "P1":
+                segment = np.asarray(event["raw_segment"], float)
+            elif group == "P2":
+                selected_attempts = [
+                    attempt for attempt in event.get("repair_attempts", ())
+                    if attempt.get("selected_local") is not None
+                ]
+                if not selected_attempts:
+                    raise ValueError("Ncausal P2 event lacks its selected branch")
+                attempt = selected_attempts[-1]
+                segment = np.asarray(attempt["segments"], float)[
+                    int(attempt["selected_local"])
+                ]
+            else:
+                raise ValueError("Ncausal overlay requires executed P1/P2")
+            axis.plot(
+                segment[:, 0], segment[:, 1], color=NCAUSAL_MAGENTA,
+                lw=2.7, marker=".", ms=1.9, alpha=.92, zorder=11,
+            )
     status_cycle = microcycle if post_recheck else microcycle - 1
     is_clear = recheck_status.get((status_cycle, lineage), False)
     if is_clear:
@@ -295,6 +321,7 @@ def render(
     output_mp4: str | Path,
     output_png: str | Path,
     fps: int = 10,
+    show_causal_negative: bool = False,
 ) -> dict:
     if int(fps) <= 0:
         raise ValueError("fps must be positive")
@@ -306,8 +333,7 @@ def render(
         left=.025, right=.87, bottom=.025, top=.94,
         wspace=.02, hspace=.08,
     )
-    figure.legend(
-        handles=[
+    legend_handles = [
             Line2D([], [], color=P1_BLUE, lw=2.2,
                    label="P1 · raw temp-1 exact-positive (executed)"),
             Line2D([], [], color=DMINUS_RED, lw=2.0, marker="x",
@@ -318,7 +344,15 @@ def render(
                    label="P2 · max-step-margin exact-positive repair"),
             Line2D([], [], color=BLACK, lw=1.2,
                    label="closed-loop first-action trajectory"),
-        ],
+    ]
+    if show_causal_negative:
+        legend_handles.insert(
+            4,
+            Line2D([], [], color=NCAUSAL_MAGENTA, lw=2.7,
+                   label="Ncausal · executed prefix before repair exhaustion"),
+        )
+    figure.legend(
+        handles=legend_handles,
         loc="center left", bbox_to_anchor=(.875, .69), frameon=False,
         fontsize=7.2,
     )
@@ -348,6 +382,7 @@ def render(
                     replica=replica, microcycle=microcycle, step=step,
                     repair_attempt_index=repair_attempt_index,
                     post_recheck=post_recheck,
+                    show_causal_negative=show_causal_negative,
                 )
         phase = (
             "fixed raw development gate" if post_recheck
@@ -377,7 +412,7 @@ def render(
     update(frames[-1])
     figure.savefig(output_png, dpi=170, bbox_inches="tight")
     plt.close(figure)
-    return {
+    result = {
         "frames": len(frames), "fps": int(fps),
         "mp4": str(output_mp4), "mp4_sha256": _sha256(output_mp4),
         "png": str(output_png), "png_sha256": _sha256(output_png),
@@ -386,6 +421,9 @@ def render(
             for (cycle, lineage), clear in sorted(recheck_status.items())
         },
     }
+    if show_causal_negative:
+        result["causal_negative_overlay"] = True
+    return result
 
 
 def parser() -> argparse.ArgumentParser:
@@ -393,6 +431,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--trace", required=True)
     value.add_argument("--output-dir", required=True)
     value.add_argument("--fps", type=int, default=10)
+    value.add_argument("--show-causal-negative", action="store_true")
     return value
 
 
@@ -408,6 +447,7 @@ def main(argv=None) -> int:
         output_mp4=output / "exhaustive_hybrid_4x4.mp4",
         output_png=output / "exhaustive_hybrid_4x4_final.png",
         fps=args.fps,
+        show_causal_negative=bool(args.show_causal_negative),
     )
     marker = {
         "status": STATUS, "version": VERSION,

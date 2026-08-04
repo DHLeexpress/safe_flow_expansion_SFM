@@ -124,6 +124,39 @@ def test_clear_appears_only_post_recheck_and_success_terminal_is_green(monkeypat
         plt.close(figure)
 
 
+def test_optional_ncausal_overlay_is_magenta_and_default_is_unchanged(monkeypatch):
+    monkeypatch.setattr(VIZ, "_draw_green", lambda *args, **kwargs: None)
+    event = _drawable_event()
+    event["causal_negative"] = True
+    event["executed_group"] = "P1"
+    grouped = {(1, LINEAGE): [event]}
+    figure, axis = plt.subplots()
+    try:
+        VIZ.draw_cell(
+            axis, grouped, {}, gamma=0.1, replica=0,
+            microcycle=1, step=0, repair_attempt_index=None,
+            post_recheck=False,
+        )
+        assert VIZ.NCAUSAL_MAGENTA not in {
+            line.get_color() for line in axis.lines
+        }
+
+        axis.clear()
+        VIZ.draw_cell(
+            axis, grouped, {}, gamma=0.1, replica=0,
+            microcycle=1, step=0, repair_attempt_index=None,
+            post_recheck=False, show_causal_negative=True,
+        )
+        magenta = [
+            line for line in axis.lines
+            if line.get_color() == VIZ.NCAUSAL_MAGENTA
+        ]
+        assert len(magenta) == 1
+        assert magenta[0].get_linewidth() == pytest.approx(2.7)
+    finally:
+        plt.close(figure)
+
+
 def _preflight_signature_payload():
     return {
         "version": HYBRID.VERSION,
