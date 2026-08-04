@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 
 import numpy as np
 import pytest
@@ -7,6 +8,69 @@ from torch import nn
 
 import sfm_hp100_early_acquisition as E
 from sfm_hp100_ball_core.expansion import Verification
+
+
+def _canonical_provenance_payload(manifest_sha="a" * 64):
+    return {
+        "scientific_status": "canonical_ID_promoted",
+        "pretrained_from_scratch": True,
+        "dataset": {"manifest_sha256": manifest_sha},
+        "provenance": {"dataset_manifest_sha256": manifest_sha},
+    }
+
+
+def test_checkpoint_provenance_accepts_embedded_canonical_r0():
+    resolved = E.resolve_checkpoint_provenance(
+        _canonical_provenance_payload(), checkpoint_path="unused.pt",
+        checkpoint_sha256="b" * 64,
+        pretrained_provenance_checkpoint=None, expansion_delivery_marker=None,
+    )
+    assert resolved == {
+        "mode": "embedded",
+        "pretrain_dataset_manifest_sha256": "a" * 64,
+        "pretrained_scientific_status": "canonical_ID_promoted",
+    }
+
+
+def test_checkpoint_provenance_authenticates_portable_expansion(tmp_path):
+    anchor = tmp_path / "r0.pt"
+    torch.save(_canonical_provenance_payload(), anchor)
+    anchor_sha = E.APPROVAL.sha256_file(anchor)
+    generic = tmp_path / "checkpoint_002.pt"
+    torch.save({"model": {"head": torch.ones(1)}, "round": 2}, generic)
+    generic_sha = E.APPROVAL.sha256_file(generic)
+    expanded = tmp_path / "evaluation_checkpoint_002.pt"
+    expanded_payload = {
+        "scientific_status": "HP100_BALL_PORT_EVALUATION_READY",
+        "pretrained_checkpoint_sha256": anchor_sha,
+        "source_generic_checkpoint": str(generic),
+        "source_generic_checkpoint_sha256": generic_sha,
+    }
+    torch.save(expanded_payload, expanded)
+    expanded_sha = E.APPROVAL.sha256_file(expanded)
+    marker = tmp_path / "EARLY_EXPANSION_COMPLETE.json"
+    marker.write_text(json.dumps({
+        "status": "SFM_HP100_EARLY_EXPANSION_COMPLETE",
+        "preflight": {
+            "checkpoint_sha256": anchor_sha,
+            "calibration": {"manifest_sha256": "a" * 64},
+        },
+        "evaluation_checkpoints": {"rows": [{
+            "path": str(expanded), "sha256": expanded_sha,
+            "source_sha256": generic_sha,
+        }]},
+    }))
+
+    resolved = E.resolve_checkpoint_provenance(
+        expanded_payload, checkpoint_path=str(expanded),
+        checkpoint_sha256=expanded_sha,
+        pretrained_provenance_checkpoint=str(anchor),
+        expansion_delivery_marker=str(marker),
+    )
+    assert resolved["mode"] == "anchored_expansion"
+    assert resolved["pretrained_checkpoint_sha256"] == anchor_sha
+    assert resolved["source_generic_checkpoint_sha256"] == generic_sha
+    assert resolved["pretrain_dataset_manifest_sha256"] == "a" * 64
 
 
 class _Policy(nn.Module):
@@ -183,7 +247,10 @@ def test_terminal_negative_uses_the_same_weighted_score_as_production():
 
 
 def test_progress_rank_and_lambda_zero_reference_are_explicit():
-    _, queries, contexts = _run(_Task(positive_steps=1), K=2, B=2)
+    events = []
+    _, queries, contexts = _run(
+        _Task(positive_steps=1), K=2, B=2, event_callback=events.append,
+    )
     first = next(
         row for row in contexts
         if row["gamma"] == .1 and row["replica"] == 0 and row["step"] == 0
@@ -203,6 +270,13 @@ def test_progress_rank_and_lambda_zero_reference_are_explicit():
     )
     assert chosen["selected_slot"] == 1
     assert reference["selected_slot"] == 0
+    trace = next(
+        row for row in events
+        if row["gamma"] == .1 and row["replica"] == 0 and row["step"] == 0
+    )
+    assert trace["chosen_H10_progress_rank"] == 2
+    assert trace["eligible_progress_candidates"] == 2
+    assert all(row["progress_eligible"] for row in trace["verification"])
 
 
 def test_trace_marks_step_30_as_early_cutoff_not_active():

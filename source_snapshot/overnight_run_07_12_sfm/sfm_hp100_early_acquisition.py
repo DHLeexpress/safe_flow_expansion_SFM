@@ -60,6 +60,111 @@ def model_state_sha256(module: torch.nn.Module) -> str:
     return digest.hexdigest()
 
 
+def _embedded_dataset_provenance(payload: dict) -> dict:
+    dataset_manifest_sha = payload.get("dataset", {}).get("manifest_sha256")
+    provenance_manifest_sha = payload.get("provenance", {}).get(
+        "dataset_manifest_sha256"
+    )
+    if (
+        not isinstance(dataset_manifest_sha, str)
+        or len(dataset_manifest_sha) != 64
+        or dataset_manifest_sha != provenance_manifest_sha
+    ):
+        raise ValueError("checkpoint pretraining-dataset provenance is incomplete")
+    return {
+        "pretrain_dataset_manifest_sha256": dataset_manifest_sha,
+        "pretrained_scientific_status": payload.get("scientific_status"),
+    }
+
+
+def resolve_checkpoint_provenance(
+    payload: dict,
+    *,
+    checkpoint_path: str,
+    checkpoint_sha256: str,
+    pretrained_provenance_checkpoint: str | None,
+    expansion_delivery_marker: str | None,
+) -> dict:
+    """Resolve an embedded or externally anchored pretraining-data chain.
+
+    Canonical r0 checkpoints carry their dataset chain directly.  Portable
+    expansion-evaluation checkpoints intentionally do not duplicate that large
+    metadata object, so tracing one requires both the canonical r0 checkpoint
+    and the immutable expansion delivery marker.  Validation happens before
+    rollout generation so an incomplete chain fails cheaply.
+    """
+    try:
+        embedded = _embedded_dataset_provenance(payload)
+    except ValueError:
+        embedded = None
+    if embedded is not None:
+        if pretrained_provenance_checkpoint or expansion_delivery_marker:
+            raise ValueError(
+                "embedded-provenance checkpoint does not accept external anchors"
+            )
+        return {"mode": "embedded", **embedded}
+
+    if payload.get("scientific_status") != "HP100_BALL_PORT_EVALUATION_READY":
+        raise ValueError("checkpoint lacks an accepted HP100 provenance mode")
+    if not pretrained_provenance_checkpoint or not expansion_delivery_marker:
+        raise ValueError(
+            "expanded checkpoint requires --pretrained-provenance-checkpoint "
+            "and --expansion-delivery-marker"
+        )
+
+    anchor_path = Path(pretrained_provenance_checkpoint).resolve()
+    anchor_sha = APPROVAL.sha256_file(anchor_path)
+    if payload.get("pretrained_checkpoint_sha256") != anchor_sha:
+        raise ValueError("expanded checkpoint does not descend from provenance anchor")
+    anchor_payload = torch.load(anchor_path, map_location="cpu", weights_only=False)
+    if (
+        not isinstance(anchor_payload, dict)
+        or anchor_payload.get("scientific_status") != "canonical_ID_promoted"
+        or anchor_payload.get("pretrained_from_scratch") is not True
+    ):
+        raise ValueError("pretraining provenance anchor is not canonical HP100 r0")
+    anchor = _embedded_dataset_provenance(anchor_payload)
+
+    marker_path = Path(expansion_delivery_marker).resolve()
+    marker = json.loads(marker_path.read_text())
+    if marker.get("status") != "SFM_HP100_EARLY_EXPANSION_COMPLETE":
+        raise ValueError("expansion delivery marker is incomplete")
+    preflight = marker.get("preflight", {})
+    if preflight.get("checkpoint_sha256") != anchor_sha:
+        raise ValueError("expansion marker does not pin the provenance anchor")
+    if preflight.get("calibration", {}).get("manifest_sha256") != anchor[
+        "pretrain_dataset_manifest_sha256"
+    ]:
+        raise ValueError("expansion marker dataset does not match provenance anchor")
+
+    resolved_checkpoint = str(Path(checkpoint_path).resolve())
+    matching = [
+        row for row in marker.get("evaluation_checkpoints", {}).get("rows", [])
+        if str(Path(row.get("path", "")).resolve()) == resolved_checkpoint
+        and row.get("sha256") == checkpoint_sha256
+    ]
+    if len(matching) != 1:
+        raise ValueError("expanded checkpoint is not uniquely pinned by delivery marker")
+    source_path = Path(payload.get("source_generic_checkpoint", "")).resolve()
+    source_sha = payload.get("source_generic_checkpoint_sha256")
+    if (
+        not source_path.is_file()
+        or APPROVAL.sha256_file(source_path) != source_sha
+        or matching[0].get("source_sha256") != source_sha
+    ):
+        raise ValueError("expanded checkpoint source-generic hash chain is broken")
+    return {
+        "mode": "anchored_expansion",
+        **anchor,
+        "pretrained_checkpoint": str(anchor_path),
+        "pretrained_checkpoint_sha256": anchor_sha,
+        "expansion_delivery_marker": str(marker_path),
+        "expansion_delivery_marker_sha256": APPROVAL.sha256_file(marker_path),
+        "source_generic_checkpoint": str(source_path),
+        "source_generic_checkpoint_sha256": source_sha,
+    }
+
+
 def _candidate_sha256(candidate: torch.Tensor) -> str:
     value = candidate.detach().cpu().to(torch.float32).contiguous().numpy()
     return hashlib.sha256(value.tobytes()).hexdigest()
@@ -755,6 +860,7 @@ def run_diagnostic(
                         "verification": [
                             {
                                 "valid": bool(result.valid),
+                                "progress_eligible": bool(result.progress_eligible),
                                 "error": bool(result.error),
                                 "execution_cost": float(result.execution_cost),
                                 "progress": float(result.progress),
@@ -766,6 +872,8 @@ def run_diagnostic(
                             for result in results
                         ],
                         "chosen_local": None if chosen is None else int(chosen),
+                        "chosen_H10_progress_rank": _progress_rank(results, chosen),
+                        "eligible_progress_candidates": len(eligible_progress),
                         "performance_reference_local": (
                             None if performance_reference is None
                             else int(performance_reference)
@@ -849,6 +957,14 @@ def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description=__doc__)
     value.add_argument("--checkpoint", required=True)
     value.add_argument("--expected-checkpoint-sha256", required=True)
+    value.add_argument(
+        "--pretrained-provenance-checkpoint",
+        help="canonical HP100 r0 anchor required only for an expanded checkpoint",
+    )
+    value.add_argument(
+        "--expansion-delivery-marker",
+        help="EARLY_EXPANSION_COMPLETE.json required only for an expanded checkpoint",
+    )
     value.add_argument("--output", required=True)
     value.add_argument("--device", default="cuda:0")
     value.add_argument("--scene-profile", default=PORT.DEFAULT_SCENE_PROFILE,
@@ -892,6 +1008,13 @@ def main(argv=None) -> int:
     adapter, checkpoint_payload, checkpoint_sha, trainable = APPROVAL._load_checkpoint(
         args.checkpoint, args.expected_checkpoint_sha256, args.device,
     )
+    checkpoint_provenance = resolve_checkpoint_provenance(
+        checkpoint_payload,
+        checkpoint_path=args.checkpoint,
+        checkpoint_sha256=checkpoint_sha,
+        pretrained_provenance_checkpoint=args.pretrained_provenance_checkpoint,
+        expansion_delivery_marker=args.expansion_delivery_marker,
+    )
     task = PORT.SFMHP100ExpansionTask(
         scene_profile=args.scene_profile, scenario_start=args.scenario_start,
     ).attach_context_encoder(adapter.policy)
@@ -924,22 +1047,14 @@ def main(argv=None) -> int:
         event_callback=(retain_trace if args.trace_output else None),
     )
     payload["wall_seconds"] = time.time() - started
-    dataset = checkpoint_payload.get("dataset", {})
-    dataset_manifest_sha = dataset.get("manifest_sha256")
-    provenance_manifest_sha = checkpoint_payload.get("provenance", {}).get(
-        "dataset_manifest_sha256"
-    )
-    if (
-        not isinstance(dataset_manifest_sha, str)
-        or len(dataset_manifest_sha) != 64
-        or dataset_manifest_sha != provenance_manifest_sha
-    ):
-        raise RuntimeError("checkpoint pretraining-dataset provenance is incomplete")
     payload["checkpoint"] = {
         "path": str(Path(args.checkpoint).resolve()), "sha256": checkpoint_sha,
-        "pretrain_dataset_manifest_sha256": dataset_manifest_sha,
+        "pretrain_dataset_manifest_sha256": checkpoint_provenance[
+            "pretrain_dataset_manifest_sha256"
+        ],
         "scientific_status": checkpoint_payload.get("scientific_status"),
         "trainable_parameter_names": trainable,
+        "provenance": checkpoint_provenance,
     }
     query_path = output / "selected_B.jsonl"
     context_path = output / "contexts.jsonl"
@@ -963,8 +1078,10 @@ def main(argv=None) -> int:
             "status": "SFM_HP100_EARLY_BRANCH_TRACE_COMPLETE",
             "version": TRACE_VERSION,
             "checkpoint_sha256": checkpoint_sha,
+            "checkpoint_provenance": checkpoint_provenance,
             "policy_state_sha256": payload["policy_state_sha256_after"],
             "config": payload["config"],
+            "summary": payload["summary"],
             "lineage_filter": {
                 "seed": seed_values[0], "replica": int(args.trace_replica),
                 "gammas": [0.1, 0.5, 1.0],

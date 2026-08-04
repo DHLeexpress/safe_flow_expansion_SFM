@@ -52,6 +52,8 @@ def _event(gamma, step, *, chosen=3, negative=None, replica=0):
         queried_candidate_ids=list(range(16)),
         queried_controls=np.zeros((16, 10, 2), np.float32),
         queried_segments=segments, verification=verification,
+        chosen_H10_progress_rank=(None if chosen is None else 2),
+        eligible_progress_candidates=(0 if chosen is None else 4),
         chosen_local=chosen, archived_negative_local=negative,
         status=("nvp" if chosen is None else None), nvp_cause=None,
     )
@@ -132,4 +134,5 @@ def test_lambda_zero_reference_is_drawn_without_becoming_execution():
     colors = [line.get_color() for line in axis.lines]
     assert V.REFERENCE in colors
     assert V.BLUE in colors
+    assert any("rank=2/4" in text.get_text() for text in axis.texts)
     plt.close(figure)

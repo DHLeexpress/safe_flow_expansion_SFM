@@ -30,7 +30,7 @@ import sfm_hp100_branch_viz as RAW_BRANCH
 import sfm_scene as SS
 
 
-VERSION = "sfm_hp100_early_branch_viz_v2"
+VERSION = "sfm_hp100_early_branch_viz_v3"
 STATUS = "SFM_HP100_EARLY_BRANCH_VIZ_COMPLETE"
 TRACE_STATUS = "SFM_HP100_EARLY_BRANCH_TRACE_COMPLETE"
 TRACE_VERSION = "sfm_hp100_early_branch_trace_v2"
@@ -122,6 +122,10 @@ def validate_trace(bundle: dict) -> None:
                 raise ValueError("blue branch is not the sole exact-positive execution")
             if sidecar is None:
                 raise ValueError("blue branch lacks its exact GREEN verifier sidecar")
+            rank = event.get("chosen_H10_progress_rank")
+            eligible = event.get("eligible_progress_candidates")
+            if rank is not None and not 1 <= int(rank) <= int(eligible):
+                raise ValueError("blue branch has an invalid declared progress rank")
             if (
                 not sidecar.get("resolved") or int(sidecar.get("y", 0)) != 1
                 or not sidecar.get("full_h")
@@ -293,6 +297,10 @@ def draw_lineage(axis, rows: list[dict], frame: int) -> dict:
             + ("" if delta is None else f"  Δvs λ0={delta:+.2f} m")
             + f"\n1-step={one_step:+.3f} m  net={net:+.2f} m"
         )
+        rank = current.get("chosen_H10_progress_rank")
+        eligible = current.get("eligible_progress_candidates")
+        if rank is not None and eligible is not None:
+            annotation += f"  rank={int(rank)}/{int(eligible)}"
         axis.text(
             .02, .02, annotation, transform=axis.transAxes,
             ha="left", va="bottom", fontsize=7.2,
@@ -310,6 +318,7 @@ def render_trace(
     output_png: str,
     fps: int = 5,
     frame_stride: int = 1,
+    model_label: str = "",
 ) -> dict:
     validate_trace(bundle)
     if int(fps) < 1 or int(frame_stride) < 1:
@@ -337,6 +346,16 @@ def render_trace(
         ],
         loc="center left", bbox_to_anchor=(.805, .61), frameon=False, fontsize=8,
     )
+    pooled = bundle.get("summary", {}).get("pooled", {})
+    aggregate = ""
+    if pooled:
+        progress = pooled.get("goal_progress", {})
+        aggregate = (
+            f"\n\nS30={float(pooled['S30']):.3f} · "
+            f"RMST@40={float(pooled['early_gather_RMST_to_max_steps']):.2f}\n"
+            f"net@30={float(pooled['lineage_macro_net_goal_progress_at_30']):.2f} m · "
+            f"mean rank={float(progress['chosen_H10_progress_rank_mean']):.2f}"
+        )
     figure.text(
         .805, .36,
         "Red is never executed.\n"
@@ -346,7 +365,8 @@ def render_trace(
         f"T_diagnostic={int(bundle['config']['max_steps'])} "
         "(selection prefix=30)\n"
         "selector: J_SafeMPPI − "
-        f"{float(bundle['config']['execution_step_margin_weight']):g} · m_step",
+        f"{float(bundle['config']['execution_step_margin_weight']):g} · m_step"
+        + aggregate,
         ha="left", va="top", fontsize=8,
     )
 
@@ -363,7 +383,10 @@ def render_trace(
                 f"γ={gamma:g} | t={event['step']} | {status}",
                 transform=axis.transAxes, ha="center", va="bottom", fontsize=9,
             )
-        figure.suptitle("HP100 early-acquisition executed-window branch audit", fontsize=11)
+        title = "HP100 early-acquisition executed-window branch audit"
+        if model_label:
+            title += f" — {model_label}"
+        figure.suptitle(title, fontsize=11)
         return []
 
     for path in (output_mp4, output_png):
@@ -381,6 +404,7 @@ def render_trace(
     return {
         "frames": frames, "mp4": str(Path(output_mp4).resolve()),
         "png": str(Path(output_png).resolve()),
+        "model_label": model_label,
     }
 
 
@@ -390,6 +414,7 @@ def main(argv=None) -> int:
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--fps", type=int, default=5)
     parser.add_argument("--frame-stride", type=int, default=1)
+    parser.add_argument("--model-label", default="")
     args = parser.parse_args(argv)
     outdir = Path(args.outdir).resolve()
     if outdir.exists():
@@ -401,6 +426,7 @@ def main(argv=None) -> int:
         output_mp4=str(outdir / "early_acquisition_branches.mp4"),
         output_png=str(outdir / "early_acquisition_branches_final.png"),
         fps=args.fps, frame_stride=args.frame_stride,
+        model_label=args.model_label,
     )
     artifacts = {
         key: {
