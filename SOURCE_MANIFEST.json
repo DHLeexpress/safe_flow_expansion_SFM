@@ -1199,8 +1199,8 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_early_lambda_report.py",
-      "bytes": 5469,
-      "sha256": "58c6bb5f5f003c623475c5486f1025df6e5f77774710751213cba7d003b87828"
+      "bytes": 6166,
+      "sha256": "a594c4f2a8458b4c24f720557fcf8b7a75495d694efa6eb879781982d90bf29c"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/analysis/test_sfm_hp100_early_two_arm.py",
@@ -1474,8 +1474,8 @@
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_early_lambda_report.py",
-      "bytes": 11434,
-      "sha256": "5f6a816762ba8aeb10e872aa5477729f06f21d415cb3abe4643074aaf4563e57"
+      "bytes": 11933,
+      "sha256": "3637f87e735e4dea415ff82f85bf454e3aacb68277f3d0a2a4022935c4d0cba2"
     },
     {
       "path": "source_snapshot/overnight_run_07_12_sfm/sfm_hp100_early_two_arm.py",

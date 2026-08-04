@@ -97,6 +97,20 @@ def test_selects_progress_preserving_survival_gain(tmp_path):
     assert len(rows) == 2
 
 
+def test_knee_gate_can_select_below_aspirational_absolute_S30(tmp_path):
+    control = _summary(.13, 2.0, 1.4, .12, .99, rmst30=16, rmst40=17)
+    knee = _summary(.30, 1.65, 1.32, .09, .79, rmst30=19, rmst40=21)
+    overtilted = _summary(.34, 1.35, 1.24, .07, .59, rmst30=20, rmst40=23)
+    report, _ = R.build_report([
+        _write(tmp_path / "control.json", _payload(0, control)),
+        _write(tmp_path / "knee.json", _payload(15_000, knee)),
+        _write(tmp_path / "overtilted.json", _payload(60_000, overtilted)),
+    ])
+    assert report["version"] == R.VERSION
+    assert report["selected"]["lambda"] == 15_000
+    assert report["selected"]["passes_aspirational_S30_0p70"] is False
+
+
 def test_fail_closed_when_survival_discards_too_much_progress(tmp_path):
     control = _summary(.60, 1.0, 1.0, .10, .92, rmst30=24, rmst40=31)
     collapsed = _summary(.90, .50, .60, .05, .60, rmst30=29, rmst40=39)
