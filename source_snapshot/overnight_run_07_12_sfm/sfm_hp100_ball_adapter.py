@@ -178,18 +178,25 @@ class HP100ExpansionPolicy(nn.Module):
         self, scope: str,
     ) -> list[torch.nn.Parameter]:
         """Apply the declared HP100 optimizer scope and return its parameters."""
-        if scope != "last_block_and_head":
+        if scope not in {
+            "last_block_and_head", "last_two_blocks_and_head",
+        }:
             raise ValueError(
-                "HP100 adapter optimizer scope must be last_block_and_head"
+                "HP100 adapter optimizer scope must be last_block_and_head or "
+                "last_two_blocks_and_head"
             )
         blocks = self.policy.trunk.blocks
         if len(blocks) != 2:
             raise RuntimeError(
-                "last_block_and_head requires the declared two-block HP100 trunk"
+                "HP100 expansion scopes require the declared two-block trunk"
             )
         for parameter in self.policy.parameters():
             parameter.requires_grad_(False)
-        parameters = [*blocks[1].parameters(), *self.policy.head.parameters()]
+        selected_blocks = blocks[1:] if scope == "last_block_and_head" else blocks
+        parameters = [
+            *(parameter for block in selected_blocks for parameter in block.parameters()),
+            *self.policy.head.parameters(),
+        ]
         for parameter in parameters:
             parameter.requires_grad_(True)
         return parameters
